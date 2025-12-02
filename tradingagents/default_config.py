@@ -9,10 +9,11 @@ DEFAULT_CONFIG = {
         "dataflows/data_cache",
     ),
     # LLM settings
-    "llm_provider": "openai",
-    "deep_think_llm": "o4-mini",
-    "quick_think_llm": "gpt-4o-mini",
-    "backend_url": "https://api.openai.com/v1",
+    "llm_provider": "ollama",
+    "deep_think_llm": "llama3.2:3b",
+    "quick_think_llm": "llama3.2:3b",
+    "backend_url": "http://localhost:11434/v1",
+    "embedding_model": "llama3.2:3b",
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
@@ -23,7 +24,7 @@ DEFAULT_CONFIG = {
         "core_stock_apis": "yfinance",       # Options: yfinance, alpha_vantage, local
         "technical_indicators": "yfinance",  # Options: yfinance, alpha_vantage, local
         "fundamental_data": "alpha_vantage", # Options: openai, alpha_vantage, local
-        "news_data": "alpha_vantage",        # Options: openai, alpha_vantage, google, local
+        "news_data": "google",        # Options: openai, alpha_vantage, google, local
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {

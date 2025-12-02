@@ -28,3 +28,11 @@ def get_google_news(
         return ""
 
     return f"## {query} Google News, from {before} to {curr_date}:\n\n{news_str}"
+
+
+def get_global_google_news(
+    curr_date: Annotated[str, "Curr date in yyyy-mm-dd format"],
+    look_back_days: Annotated[int, "how many days to look back"] = 7,
+    limit: Annotated[int, "Maximum number of articles to return"] = 5,
+) -> str:
+    return get_google_news("global financial market news", curr_date, look_back_days)
