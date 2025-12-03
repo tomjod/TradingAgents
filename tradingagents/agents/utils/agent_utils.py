@@ -19,6 +19,11 @@ from tradingagents.agents.utils.news_data_tools import (
     get_insider_transactions,
     get_global_news
 )
+from tradingagents.agents.utils.trading_execution_tools import (
+    execute_order,
+    get_open_positions,
+    get_trade_history
+)
 
 def create_msg_delete():
     def delete_messages(state):
@@ -34,6 +39,3 @@ def create_msg_delete():
         return {"messages": removal_operations + [placeholder]}
     
     return delete_messages
-
-
-        

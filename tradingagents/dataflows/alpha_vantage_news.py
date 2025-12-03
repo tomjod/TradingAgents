@@ -22,6 +22,9 @@ def get_news(ticker, start_date, end_date) -> dict[str, str] | str:
         "limit": "50",
     }
     
+    # Remove None values
+    params = {k: v for k, v in params.items() if v is not None}
+    
     return _make_api_request("NEWS_SENTIMENT", params)
 
 def get_insider_transactions(symbol: str) -> dict[str, str] | str:

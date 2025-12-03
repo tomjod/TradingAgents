@@ -5,8 +5,8 @@ from tradingagents.dataflows.interface import route_to_vendor
 @tool
 def get_news(
     ticker: Annotated[str, "Ticker symbol"],
-    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
-    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format (optional)"] = None,
+    end_date: Annotated[str, "End date in yyyy-mm-dd format (optional)"] = None,
 ) -> str:
     """
     Retrieve news data for a given ticker symbol.
@@ -18,6 +18,10 @@ def get_news(
     Returns:
         str: A formatted string containing news data
     """
+    # Handle empty strings as None
+    if start_date == "": start_date = None
+    if end_date == "": end_date = None
+    
     return route_to_vendor("get_news", ticker, start_date, end_date)
 
 @tool

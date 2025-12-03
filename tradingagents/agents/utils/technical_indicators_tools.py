@@ -6,7 +6,7 @@ from tradingagents.dataflows.interface import route_to_vendor
 def get_indicators(
     symbol: Annotated[str, "ticker symbol of the company"],
     indicator: Annotated[str, "technical indicator to get the analysis and report of"],
-    curr_date: Annotated[str, "The current trading date you are trading on, YYYY-mm-dd"],
+    curr_date: Annotated[str, "The current trading date you are trading on, YYYY-mm-dd (optional)"] = None,
     look_back_days: Annotated[int, "how many days to look back"] = 30,
 ) -> str:
     """
@@ -20,4 +20,8 @@ def get_indicators(
     Returns:
         str: A formatted dataframe containing the technical indicators for the specified ticker symbol and indicator.
     """
+    if not curr_date:
+        from datetime import datetime
+        curr_date = datetime.now().strftime("%Y-%m-%d")
+        
     return route_to_vendor("get_indicators", symbol, indicator, curr_date, look_back_days)

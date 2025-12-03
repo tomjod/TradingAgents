@@ -33,7 +33,10 @@ from tradingagents.agents.utils.agent_utils import (
     get_news,
     get_insider_sentiment,
     get_insider_transactions,
-    get_global_news
+    get_global_news,
+    execute_order,
+    get_open_positions,
+    get_trade_history
 )
 
 from .conditional_logic import ConditionalLogic
@@ -154,6 +157,14 @@ class TradingAgentsGraph:
                     get_balance_sheet,
                     get_cashflow,
                     get_income_statement,
+                ]
+            ),
+            "trader": ToolNode(
+                [
+                    # Trading execution tools
+                    # execute_order, # Disabled for General Agent
+                    # get_open_positions, # Disabled for General Agent
+                    # get_trade_history, # Disabled per user request
                 ]
             ),
         }

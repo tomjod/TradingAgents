@@ -1,6 +1,7 @@
 import functools
 import time
 import json
+from tradingagents.agents.utils.agent_utils import execute_order, get_open_positions, get_trade_history
 
 
 def create_trader(llm, memory):
@@ -24,18 +25,33 @@ def create_trader(llm, memory):
 
         context = {
             "role": "user",
-            "content": f"Based on a comprehensive analysis by a team of analysts, here is an investment plan tailored for {company_name}. This plan incorporates insights from current technical market trends, macroeconomic indicators, and social media sentiment. Use this plan as a foundation for evaluating your next trading decision.\n\nProposed Investment Plan: {investment_plan}\n\nLeverage these insights to make an informed and strategic decision.",
+            "content": f"Based on a comprehensive analysis by a team of analysts, here is an investment plan tailored for {company_name} (asset/ticker). This plan incorporates insights from current technical market trends, macroeconomic indicators, and social media sentiment. Use this plan as a foundation for evaluating your next trading decision.\n\nProposed Investment Plan: {investment_plan}\n\nLeverage these insights to make an informed and strategic decision.",
         }
 
+        tools = []
+        
         messages = [
             {
                 "role": "system",
-                "content": f"""You are a trading agent analyzing market data to make investment decisions. Based on your analysis, provide a specific recommendation to buy, sell, or hold. End with a firm decision and always conclude your response with 'FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL**' to confirm your recommendation. Do not forget to utilize lessons from past decisions to learn from your mistakes. Here is some reflections from similar situatiosn you traded in and the lessons learned: {past_memory_str}""",
+                "content": f"""You are a Strategy Advisor for an automated trading system. Your role is to analyze market data and provide a directional bias (BUY, SELL, or HOLD) for the execution bot ("Soldier").
+
+                CRITICAL: You do NOT execute trades yourself. You do NOT manage positions. Your ONLY job is to determine the best market direction based on the analysis provided.
+
+                - Analyze the provided reports (Market, Sentiment, News, Fundamentals).
+                - Determine the overall trend and conviction.
+                - Recommend a clear directional bias:
+                    - **BUY**: If the market is bullish and conditions favor long positions.
+                    - **SELL**: If the market is bearish and conditions favor short positions.
+                    - **HOLD**: If the market is uncertain or choppy.
+
+                End with a firm decision and always conclude your response with 'FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL**' to confirm your recommendation. Do not forget to utilize lessons from past decisions to learn from your mistakes. Here is some reflections from similar situatiosn you traded in and the lessons learned: {past_memory_str}""",
             },
             context,
         ]
 
-        result = llm.invoke(messages)
+        # Bind tools to the LLM
+        llm_with_tools = llm.bind_tools(tools)
+        result = llm_with_tools.invoke(messages)
 
         return {
             "messages": [result],

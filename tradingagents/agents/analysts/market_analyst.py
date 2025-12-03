@@ -42,8 +42,14 @@ Volatility Indicators:
 Volume-Based Indicators:
 - vwma: VWMA: A moving average weighted by volume. Usage: Confirm trends by integrating price action with volume data. Tips: Watch for skewed results from volume spikes; use in combination with other volume analyses.
 
-- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. When you tool call, please use the exact name of the indicators provided above as they are defined parameters, otherwise your call will fail. Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names. Write a very detailed and nuanced report of the trends you observe. Do not simply state the trends are mixed, provide detailed and finegrained analysis and insights that may help traders make decisions."""
-            + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""
+- Select indicators that provide diverse and complementary information. Avoid redundancy (e.g., do not select both rsi and stochrsi). Also briefly explain why they are suitable for the given market context. 
+
+When you tool call, please use the exact name of the indicators provided above as they are defined parameters. 
+IMPORTANT: Do NOT nest indicators (e.g., do NOT ask for `close_50_sma(close_200_sma)`). Request each indicator separately in the list (e.g., `['close_50_sma', 'close_200_sma']`).
+Please make sure to call get_stock_data first to retrieve the CSV that is needed to generate indicators. Then use get_indicators with the specific indicator names. Write a very detailed and nuanced report of the trends you observe. Do not simply state the trends are mixed, provide detailed and finegrained analysis and insights that may help traders make decisions."""
+            + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read.
+            
+            Note: If the asset is a commodity (like XAUUSDm) or a currency pair, apply these indicators to its price action just as you would for a stock. The principles of trend, momentum, and volatility apply universally."""
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -57,7 +63,7 @@ Volume-Based Indicators:
                     " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
                     " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
                     " You have access to the following tools: {tool_names}.\n{system_message}"
-                    "For your reference, the current date is {current_date}. The company we want to look at is {ticker}",
+                    "For your reference, the current date is {current_date}. The asset/symbol we want to look at is {ticker}",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]

@@ -32,6 +32,8 @@ def format_datetime_for_api(date_input) -> str:
                 raise ValueError(f"Unsupported date format: {date_input}")
     elif isinstance(date_input, datetime):
         return date_input.strftime("%Y%m%dT%H%M")
+    elif date_input is None:
+        return None
     else:
         raise ValueError(f"Date must be string or datetime object, got {type(date_input)}")
 

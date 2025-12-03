@@ -1,5 +1,15 @@
 import time
-from tradingagents.dataflows.y_finance import get_YFin_data_online, get_stock_stats_indicators_window, get_balance_sheet as get_yfinance_balance_sheet, get_cashflow as get_yfinance_cashflow, get_income_statement as get_yfinance_income_statement, get_insider_transactions as get_yfinance_insider_transactions
+import os
+import sys
+from dotenv import load_dotenv
+
+# Add project root to sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Load environment variables
+load_dotenv()
+
+from tradingagents.dataflows.y_finance import get_stock_stats_indicators_window
 
 print("Testing optimized implementation with 30-day lookback:")
 start_time = time.time()

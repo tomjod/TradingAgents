@@ -125,6 +125,7 @@ class GraphSetup:
         workflow.add_node("Neutral Analyst", neutral_analyst)
         workflow.add_node("Safe Analyst", safe_analyst)
         workflow.add_node("Risk Judge", risk_manager_node)
+        workflow.add_node("tools_trader", self.tool_nodes["trader"])
 
         # Define edges
         # Start with the first analyst
@@ -170,7 +171,14 @@ class GraphSetup:
             },
         )
         workflow.add_edge("Research Manager", "Trader")
-        workflow.add_edge("Trader", "Risky Analyst")
+        
+        # Trader execution logic
+        workflow.add_conditional_edges(
+            "Trader",
+            self.conditional_logic.should_continue_trader,
+            ["tools_trader", "Risky Analyst"]
+        )
+        workflow.add_edge("tools_trader", "Trader")
         workflow.add_conditional_edges(
             "Risky Analyst",
             self.conditional_logic.should_continue_risk_analysis,

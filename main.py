@@ -16,7 +16,9 @@ config["max_debate_rounds"] = 1  # Increase debate rounds
 ta = TradingAgentsGraph(debug=True, config=config)
 
 # forward propagate
-_, decision = ta.propagate("XAUUSD", "2024-05-10")
+from datetime import datetime
+today = datetime.now().strftime("%Y-%m-%d")
+_, decision = ta.propagate("XAUUSDm", today)
 print(decision)
 
 # Memorize mistakes and reflect

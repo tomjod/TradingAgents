@@ -1,0 +1,25 @@
+# Trading Bot Configuration
+
+# Symbol to trade
+symbol: "XAUUSDm"
+
+# Timeframe (M1, M5, M15, M30, H1, H4, D1)
+timeframe: "M5"
+
+# Paths (Relative to Project Root)
+model_path: "models/xgboost_scalper.json"
+bias_file: "bias.json"
+
+# Trading Parameters
+volume: 0.01
+sl_points: 500
+tp_points: 500
+max_spread: 20
+
+# Trailing Stop
+trailing_stop_start: 200
+trailing_step: 50
+
+# Strategy
+max_positions: 5
+interval_seconds: 900 # General Agent loop interval
