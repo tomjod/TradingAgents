@@ -24,6 +24,7 @@ from bots.numba_indicators import (
     calculate_trailing_stop,
     calculate_dynamic_lot
 )
+from bots.risk_guardian import RiskGuardian
 
 # Load environment variables
 load_dotenv()
@@ -380,7 +381,7 @@ def interpret_state(bias, rsi, prob, price, lower_band, upper_band, ema):
         
     return " | ".join(explanations)
 
-def execute_trade(action):
+def execute_trade(action, lot_multiplier=1.0):
     # Check Spread
     tick = mt5.symbol_info_tick(SYMBOL)
     spread = tick.ask - tick.bid
@@ -396,8 +397,14 @@ def execute_trade(action):
     sl = price - SL_POINTS * point if action == "BUY" else price + SL_POINTS * point
     tp = price + TP_POINTS * point if action == "BUY" else price - TP_POINTS * point
     
-    # Calculate dynamic volume
-    volume = calculate_dynamic_volume(SL_POINTS)
+    # Calculate dynamic volume with lot multiplier (drawdown protection)
+    base_volume = calculate_dynamic_volume(SL_POINTS)
+    volume = round(base_volume * lot_multiplier, 2)
+    
+    # Ensure minimum volume
+    symbol_info = mt5.symbol_info(SYMBOL)
+    if volume < symbol_info.volume_min:
+        volume = symbol_info.volume_min
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -415,7 +422,8 @@ def execute_trade(action):
     }
     
     result = mt5.order_send(request)
-    print(f"Order Sent: {action} | Vol: {volume} | Result: {result.retcode}")
+    multiplier_info = f" (x{lot_multiplier})" if lot_multiplier < 1.0 else ""
+    print(f"Order Sent: {action} | Vol: {volume}{multiplier_info} | Result: {result.retcode}")
     return result
 
 def main():
@@ -437,6 +445,9 @@ def main():
     model.load_model(MODEL_PATH)
     print("XGBoost Model Loaded")
     
+    # Initialize Risk Guardian (Kill Switch)
+    guardian = RiskGuardian(config)
+    
     # Track last known positions to detect closures
     last_known_tickets = set()
     bot_closed_tickets = set()
@@ -450,6 +461,13 @@ def main():
                 if not initialize_mt5():
                     time.sleep(5)
                     continue
+            
+            # === KILL SWITCH CHECK ===
+            can_trade, reason = guardian.can_trade()
+            if not can_trade:
+                print(f"🛑 KILL SWITCH: {reason}")
+                time.sleep(60)  # Check again in 1 minute
+                continue
             
             # 1. Read General's Bias
             bias = load_bias()
@@ -622,7 +640,9 @@ def main():
             
             # 6. Execute Entry
             if action != "HOLD":
-                res = execute_trade(action)
+                # Get lot multiplier from Risk Guardian (drawdown protection)
+                lot_multiplier = guardian.get_lot_multiplier()
+                res = execute_trade(action, lot_multiplier)
                 if res and res.retcode == mt5.TRADE_RETCODE_DONE:
                     print(f"\n>>> POSITION OPENED: {action} | Ticket: {res.order}")
                 time.sleep(60) # Wait 1 min after trade to avoid double entry

@@ -9,3 +9,6 @@ eval_results/
 eval_data/
 *.egg-info/
 .env
+state.json
+state.json
+risk_state.json

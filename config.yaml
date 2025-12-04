@@ -23,3 +23,11 @@ trailing_step: 50
 # Strategy
 max_positions: 5
 interval_seconds: 900 # General Agent loop interval
+
+# Kill Switch Risk Management
+kill_switch:
+  daily_loss_limit: 0.02 # 2% max loss per day -> stop trading
+  max_drawdown: 0.05 # 5% from peak -> reduce lot 50%
+  volatility_spread: 50 # Max spread to trade (points)
+  lot_reduction: 0.5 # Reduce lot by 50% when in drawdown
+  state_file: "risk_state.json"
