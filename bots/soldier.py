@@ -1,7 +1,7 @@
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
-import xgboost as xgb
+import lightgbm as lgb
 from stockstats import wrap
 import time
 import json
@@ -120,43 +120,78 @@ def initialize_mt5():
                 print(f"Attempting login: Account={login}, Server={server}")
                 authorized = mt5.login(int(login), password=password, server=server)
                 if authorized:
-                    print(f"Connected to MT5 account #{login}")
+                    print(f"✅ Connected to MT5 account #{login}")
                     return True
                 else:
-                    print(f"failed to connect at account #{login}, error code: {mt5.last_error()}")
+                    error = mt5.last_error()
+                    print(f"\n{'='*60}")
+                    print(f"❌ MT5 CONNECTION FAILED")
+                    print(f"{'='*60}")
+                    print(f"   Account: {login}")
+                    print(f"   Server: {server}")
+                    print(f"   Error: {error}")
+                    print(f"\n🔧 POSSIBLE SOLUTIONS:")
+                    if "Invalid account" in str(error) or error[0] == -2:
+                        print(f"   1. Demo account may have expired (Exness demos expire after ~30 days)")
+                        print(f"   2. Create a new demo account at https://my.exness.com/")
+                        print(f"   3. Update credentials in .env file")
+                    elif "Authorization failed" in str(error):
+                        print(f"   1. Check password in .env file")
+                        print(f"   2. Check server name (should match MT5 terminal)")
+                    else:
+                        print(f"   1. Check internet connection")
+                        print(f"   2. Restart MT5 terminal")
+                        print(f"   3. Check broker server status")
+                    print(f"{'='*60}\n")
                     mt5.shutdown()
                     return False
             return True
             
         except Exception as e:
-            print(f"Failed to login to MT5: {e}")
+            print(f"❌ Failed to initialize MT5: {e}")
             time.sleep(2)
             
     return True
 
 def initialize_symbol():
+    # Check if MT5 is actually connected
+    terminal_info = mt5.terminal_info()
+    if terminal_info is None:
+        print(f"\n❌ MT5 not connected! Cannot initialize symbol.")
+        print(f"   Run soldier.py again after fixing MT5 connection.\n")
+        return False
+    
     # Attempt to enable the symbol in Market Watch
     if not mt5.symbol_select(SYMBOL, True):
-        print(f"Failed to select {SYMBOL}, trying to find it...")
+        print(f"⚠️ Failed to select {SYMBOL}, trying to find it...")
         
-        # Check if it exists but is not visible
+        # Check if symbols are available at all
+        symbols = mt5.symbols_get()
+        if symbols is None or len(symbols) == 0:
+            print(f"\n❌ NO SYMBOLS AVAILABLE")
+            print(f"   MT5 may not be fully connected to broker.")
+            print(f"   1. Open MT5 terminal manually")
+            print(f"   2. Wait for symbols to load")
+            print(f"   3. Try again\n")
+            return False
+        
+        # Check if symbol exists
         info = mt5.symbol_info(SYMBOL)
         if info is None:
-            print(f"Symbol {SYMBOL} not found!")
-            # Try to find similar symbols
-            symbols = mt5.symbols_get()
-            similar = [s.name for s in symbols if "XAU" in s.name or "GOLD" in s.name]
+            print(f"\n❌ Symbol '{SYMBOL}' not found!")
+            similar = [s.name for s in symbols if "XAU" in s.name.upper() or "GOLD" in s.name.upper()]
             if similar:
-                print(f"Did you mean one of these? {similar}")
+                print(f"   Available Gold symbols: {similar[:5]}")
+                print(f"   Update 'symbol' in config.yaml to one of these.\n")
             else:
-                print("No similar symbols found. Check your broker's symbol list.")
+                print(f"   No Gold symbols found. Check broker's available instruments.\n")
             return False
             
     # Check if data is available
-    print(f"Symbol {SYMBOL} selected. Checking data...")
+    print(f"✅ Symbol {SYMBOL} selected. Checking data...")
     rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, 1)
     if rates is None:
-        print(f"Still no data for {SYMBOL}. History might be syncing...")
+        print(f"⚠️ Still no data for {SYMBOL}. History might be syncing...")
         return False
         
     return True
@@ -188,8 +223,9 @@ def get_data():
 def calculate_features(df):
     stock = wrap(df)
     
-    # 1. Basic Indicators (Calculated inside stock object)
+    # 1. Basic Indicators
     _ = stock['rsi_14']
+    _ = stock['rsi_6']  # Short-term RSI
     _ = stock['boll']
     _ = stock['boll_ub']
     _ = stock['boll_lb']
@@ -199,13 +235,15 @@ def calculate_features(df):
     _ = stock['atr']
     _ = stock['cci']
     _ = stock['adx']
-    _ = stock['close_10_ema']  # For Trend Logic
+    _ = stock['close_5_ema']
+    _ = stock['close_10_ema']
+    _ = stock['close_20_ema']
+    _ = stock['close_50_sma']
     
-    # Convert back to DF to ensure columns exist for custom calc
+    # Convert back to DF
     df_calc = pd.DataFrame(stock)
     
-    # 2. Advanced Features using Numba JIT (C-speed calculations)
-    # Extract numpy arrays for JIT functions
+    # 2. Price Action Features (using Numba where possible)
     rsi_array = df_calc['rsi_14'].to_numpy(dtype=np.float64)
     macd_array = df_calc['macd'].to_numpy(dtype=np.float64)
     volume_array = df_calc['volume'].to_numpy(dtype=np.float64)
@@ -229,17 +267,59 @@ def calculate_features(df):
     # JIT-compiled volume trend
     df_calc.loc[last_idx, 'vol_trend'] = calculate_vol_trend(volume_array)
     
-    # Return the last row as a DataFrame for prediction (keeping feature names)
+    # 3. NEW: Momentum Features
+    df_calc['price_change_1'] = df_calc['close'].pct_change(1)
+    df_calc['price_change_3'] = df_calc['close'].pct_change(3)
+    df_calc['price_change_5'] = df_calc['close'].pct_change(5)
+    df_calc['high_low_range'] = (df_calc['high'] - df_calc['low']) / df_calc['close']
+    df_calc['close_to_high'] = (df_calc['high'] - df_calc['close']) / (df_calc['high'] - df_calc['low'] + 0.001)
+    df_calc['close_to_low'] = (df_calc['close'] - df_calc['low']) / (df_calc['high'] - df_calc['low'] + 0.001)
+    
+    # 4. NEW: Trend Strength
+    df_calc['ema_cross'] = (df_calc['close_5_ema'] - df_calc['close_20_ema']) / df_calc['close']
+    df_calc['trend_strength'] = (df_calc['close'] - df_calc['close_50_sma']) / df_calc['close_50_sma']
+    df_calc['adx_slope'] = df_calc['adx'] - df_calc['adx'].shift(3)
+    
+    # 5. NEW: Volatility Features
+    df_calc['atr_ratio'] = df_calc['atr'] / df_calc['close']
+    df_calc['vol_spike'] = df_calc['volume'] / df_calc['volume'].shift(1)
+    df_calc['range_expansion'] = df_calc['high_low_range'] / df_calc['high_low_range'].rolling(10).mean()
+    
+    # 6. NEW: RSI Divergence Proxy
+    df_calc['rsi_price_div'] = df_calc['rsi_14'].diff(5) - (df_calc['close'].pct_change(5) * 100)
+    
+    # 7. Time-based Features
+    if 'time' in df_calc.columns:
+        df_calc['time'] = pd.to_datetime(df_calc['time'])
+        df_calc['hour'] = df_calc['time'].dt.hour
+        df_calc['day_of_week'] = df_calc['time'].dt.dayofweek
+        df_calc['london_session'] = ((df_calc['hour'] >= 8) & (df_calc['hour'] <= 16)).astype(int)
+        df_calc['ny_session'] = ((df_calc['hour'] >= 13) & (df_calc['hour'] <= 21)).astype(int)
+        df_calc['overlap_session'] = ((df_calc['hour'] >= 13) & (df_calc['hour'] <= 16)).astype(int)
+    
+    # Feature list matching training (36 features)
     features = [
-        'rsi_14', 'rsi_slope',
+        # Basic indicators
+        'rsi_14', 'rsi_6', 'rsi_slope',
         'boll', 'boll_ub', 'boll_lb', 'bb_width', 'dist_ma',
         'macd', 'macds', 'macdh', 'macd_slope',
-        'atr', 'cci', 'adx',
-        'close', 'volume', 'vol_trend'
+        'atr', 'atr_ratio', 'cci', 'adx', 'adx_slope',
+        # Price action
+        'close', 'volume', 'vol_trend', 'vol_spike',
+        'price_change_1', 'price_change_3', 'price_change_5',
+        'high_low_range', 'close_to_high', 'close_to_low',
+        # Trend
+        'ema_cross', 'trend_strength',
+        # Volatility
+        'range_expansion', 'rsi_price_div'
     ]
     
-    # Get last row
-    last_row = df_calc.iloc[[-1]][features]
+    # Add time features if available
+    if 'hour' in df_calc.columns:
+        features += ['hour', 'day_of_week', 'london_session', 'ny_session', 'overlap_session']
+    
+    # Get last row, fill NaN with 0
+    last_row = df_calc.iloc[[-1]][features].fillna(0)
     return last_row, df_calc.iloc[-1]
 
 def close_position(position):
@@ -273,7 +353,7 @@ def calculate_dynamic_volume(sl_points):
     Calculates dynamic lot size based on risk percentage of equity.
     Uses Numba JIT-compiled function for C-speed calculation.
     """
-    RISK_PERCENT = 0.01  # 1% Risk per trade
+    RISK_PERCENT = config.get("risk_percent", 0.01)  # Default 1% Risk per trade
     
     account_info = mt5.account_info()
     if account_info is None:
@@ -295,6 +375,12 @@ def calculate_dynamic_volume(sl_points):
         volume_min=float(symbol_info.volume_min),
         volume_max=float(symbol_info.volume_max)
     )
+    
+    # Debug log (first time only)
+    if not hasattr(calculate_dynamic_volume, '_logged'):
+        risk_amount = account_info.equity * RISK_PERCENT
+        print(f"📊 Dynamic Lot: Equity=${account_info.equity:.2f} | Risk {RISK_PERCENT*100}%=${risk_amount:.2f} | Vol={calc_volume:.2f}")
+        calculate_dynamic_volume._logged = True
     
     return float(f"{calc_volume:.2f}")
 
@@ -423,8 +509,18 @@ def execute_trade(action, lot_multiplier=1.0):
     
     result = mt5.order_send(request)
     multiplier_info = f" (x{lot_multiplier})" if lot_multiplier < 1.0 else ""
-    print(f"Order Sent: {action} | Vol: {volume}{multiplier_info} | Result: {result.retcode}")
-    return result
+    
+    if result.retcode == mt5.TRADE_RETCODE_DONE:
+        print(f"\n{'='*60}")
+        print(f"✅ ORDER EXECUTED: {action}")
+        print(f"   Entry: {price:.2f} | Vol: {volume}{multiplier_info}")
+        print(f"   SL: {sl:.2f} | TP: {tp:.2f}")
+        print(f"   Ticket: #{result.order}")
+        print(f"{'='*60}")
+    else:
+        print(f"❌ Order Failed: {action} | Code: {result.retcode}")
+    
+    return result, price, sl, tp
 
 def main():
     print("Soldier Agent Starting...")
@@ -440,16 +536,16 @@ def main():
         mt5.shutdown()
         return
 
-    # Load Model
-    model = xgb.Booster()
-    model.load_model(MODEL_PATH)
-    print("XGBoost Model Loaded")
+    # Load Model (LightGBM)
+    model = lgb.Booster(model_file=MODEL_PATH)
+    print("LightGBM Model Loaded")
     
     # Initialize Risk Guardian (Kill Switch)
     guardian = RiskGuardian(config)
     
     # Track last known positions to detect closures
     last_known_tickets = set()
+    last_known_positions = {}  # Store position details for closure logging
     bot_closed_tickets = set()
 
     print("Entering main loop...")
@@ -478,6 +574,16 @@ def main():
             
             if positions:
                 current_tickets = {p.ticket for p in positions}
+                # Track position details for closure logging
+                for p in positions:
+                    if p.ticket not in last_known_positions:
+                        last_known_positions[p.ticket] = {
+                            'type': 'BUY' if p.type == mt5.ORDER_TYPE_BUY else 'SELL',
+                            'open_price': p.price_open,
+                            'volume': p.volume,
+                            'sl': p.sl,
+                            'tp': p.tp
+                        }
             
             # Detect closed positions (SL/TP or Manual)
             missing_tickets = last_known_tickets - current_tickets
@@ -485,8 +591,33 @@ def main():
             # Filter out ones we closed ourselves
             external_closures = missing_tickets - bot_closed_tickets
             
+            # Log closed positions with details
             if external_closures:
-                print(f"\nPositions closed externally (SL/TP/Manual): {external_closures}")
+                for ticket in external_closures:
+                    pos_info = last_known_positions.get(ticket, {})
+                    pos_type = pos_info.get('type', '?')
+                    open_price = pos_info.get('open_price', 0)
+                    
+                    # Get deal history to find profit
+                    deals = mt5.history_deals_get(position=ticket)
+                    if deals and len(deals) > 0:
+                        close_deal = deals[-1]
+                        profit = close_deal.profit
+                        close_price = close_deal.price
+                        
+                        emoji = "💰" if profit > 0 else "💸"
+                        result = "PROFIT" if profit > 0 else "LOSS"
+                        
+                        print(f"\n{'='*60}")
+                        print(f"{emoji} POSITION CLOSED: {pos_type} #{ticket}")
+                        print(f"   Open: {open_price:.2f} → Close: {close_price:.2f}")
+                        print(f"   Result: {result} ${profit:.2f}")
+                        print(f"{'='*60}")
+                    else:
+                        print(f"\n📍 Position #{ticket} closed (details unavailable)")
+                    
+                    # Clean up tracking
+                    last_known_positions.pop(ticket, None)
             
             bot_closed_tickets.clear()
                 
@@ -501,9 +632,8 @@ def main():
                 
             X_pred, last_candle = calculate_features(df)
             
-            # 4. XGBoost Prediction
-            dmatrix = xgb.DMatrix(X_pred)
-            prob = model.predict(dmatrix)[0] # Probability of UP
+            # 4. LightGBM Prediction
+            prob = model.predict(X_pred)[0]  # Probability of UP
             
             # 5. Logic Variables
             current_price = last_candle['close']
@@ -642,9 +772,11 @@ def main():
             if action != "HOLD":
                 # Get lot multiplier from Risk Guardian (drawdown protection)
                 lot_multiplier = guardian.get_lot_multiplier()
-                res = execute_trade(action, lot_multiplier)
-                if res and res.retcode == mt5.TRADE_RETCODE_DONE:
-                    print(f"\n>>> POSITION OPENED: {action} | Ticket: {res.order}")
+                result = execute_trade(action, lot_multiplier)
+                if result:
+                    res, entry_price, sl, tp = result
+                    if res.retcode == mt5.TRADE_RETCODE_DONE:
+                        pass  # Logging already done in execute_trade
                 time.sleep(60) # Wait 1 min after trade to avoid double entry
             
             time.sleep(0.2) # Tick loop

@@ -45,14 +45,17 @@ def get_general_decision(graph):
     today = datetime.now().strftime("%Y-%m-%d")
     print(f"General is thinking... (Date: {today})")
     
-    # Run the graph
-    # The graph returns a final state. We need to extract the "Bias" from it.
-    # Currently, the graph produces a "final_trade_decision" (BUY/SELL/HOLD).
-    # We can map this to our Scalping Bias.
-    
     try:
-        final_state, signal = graph.propagate(SYMBOL, today)
-        decision = final_state.get("final_trade_decision", "HOLD").upper()
+        final_state, processed_signal = graph.propagate(SYMBOL, today)
+        
+        # Use the processed signal (already extracted to BUY/SELL/HOLD)
+        decision = processed_signal.strip().upper()
+        
+        # Also check raw decision as fallback
+        raw_decision = final_state.get("final_trade_decision", "")
+        
+        print(f"📊 Processed Signal: {decision}")
+        print(f"📝 Raw Decision Preview: {raw_decision[:100]}...")
         
         # Map decision to Bias
         if "BUY" in decision:
@@ -60,10 +63,19 @@ def get_general_decision(graph):
         elif "SELL" in decision:
             return "BEARISH_SCALPING", decision
         else:
+            # Fallback: check raw decision if processed fails
+            if "**SELL**" in raw_decision or "SELL" in raw_decision.upper()[:200]:
+                print("⚠️ Using fallback: Found SELL in raw decision")
+                return "BEARISH_SCALPING", "SELL (from raw)"
+            elif "**BUY**" in raw_decision or "BUY" in raw_decision.upper()[:200]:
+                print("⚠️ Using fallback: Found BUY in raw decision")
+                return "BULLISH_SCALPING", "BUY (from raw)"
             return "NEUTRAL", decision
             
     except Exception as e:
         print(f"Error in General's thought process: {e}")
+        import traceback
+        traceback.print_exc()
         return "NEUTRAL", f"Error: {e}"
 
 def main():

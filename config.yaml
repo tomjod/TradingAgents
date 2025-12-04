@@ -7,14 +7,15 @@ symbol: "XAUUSDm"
 timeframe: "M5"
 
 # Paths (Relative to Project Root)
-model_path: "models/xgboost_scalper.json"
+model_path: "models/lightgbm_scalper.txt"
 bias_file: "bias.json"
 
 # Trading Parameters
 volume: 0.01
+risk_percent: 0.02 # 2% risk per trade (affects dynamic lot size)
 sl_points: 500
 tp_points: 500
-max_spread: 80
+max_spread: 180
 
 # Trailing Stop
 trailing_stop_start: 200
