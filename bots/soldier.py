@@ -7,6 +7,7 @@ import time
 import json
 import os
 import sys
+import asyncio
 from datetime import datetime
 import traceback
 from dotenv import load_dotenv
@@ -60,6 +61,8 @@ MAX_SPREAD = config["max_spread"]
 TRAILING_STOP_START = config["trailing_stop_start"]
 TRAILING_STEP = config["trailing_step"]
 MAX_POSITIONS = config["max_positions"]
+CUT_LOSS_POINTS = config.get("cut_loss_points", 2000)  # Default to 2000 if not set
+TRADE_COOLDOWN = config.get("trade_cooldown", 120)  # Seconds between trades
 
 def check_trailing_stop(position):
     """
@@ -467,6 +470,9 @@ def interpret_state(bias, rsi, prob, price, lower_band, upper_band, ema):
         
     return " | ".join(explanations)
 
+# Global for ATR tracking
+last_atr = 0
+
 def execute_trade(action, lot_multiplier=1.0):
     # Check Spread
     tick = mt5.symbol_info_tick(SYMBOL)
@@ -480,10 +486,11 @@ def execute_trade(action, lot_multiplier=1.0):
 
     price = tick.ask if action == "BUY" else tick.bid
     
+    # Use FIXED SL from config (500 points = safe distance)
     sl = price - SL_POINTS * point if action == "BUY" else price + SL_POINTS * point
-    tp = price + TP_POINTS * point if action == "BUY" else price - TP_POINTS * point
+    # NO TP - Exit on signal change instead (more natural/variable profits)
     
-    # Calculate dynamic volume with lot multiplier (drawdown protection)
+    # Calculate dynamic volume based on SL
     base_volume = calculate_dynamic_volume(SL_POINTS)
     volume = round(base_volume * lot_multiplier, 2)
     
@@ -491,6 +498,8 @@ def execute_trade(action, lot_multiplier=1.0):
     symbol_info = mt5.symbol_info(SYMBOL)
     if volume < symbol_info.volume_min:
         volume = symbol_info.volume_min
+    if volume > 0.05:  # Cap at 0.05 for smaller trades
+        volume = 0.05
     
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -499,7 +508,6 @@ def execute_trade(action, lot_multiplier=1.0):
         "type": mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL,
         "price": price,
         "sl": sl,
-        "tp": tp,
         "deviation": 20,
         "magic": 999000, # Soldier Magic Number
         "comment": "Soldier Scalp",
@@ -507,286 +515,310 @@ def execute_trade(action, lot_multiplier=1.0):
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
     
+    # No TP - will exit on signal change (variable profits)
+    
     result = mt5.order_send(request)
     multiplier_info = f" (x{lot_multiplier})" if lot_multiplier < 1.0 else ""
+    
+    # Check if order_send returned None
+    if result is None:
+        print(f"❌ Order Failed: {action} | Error: order_send returned None - {mt5.last_error()}")
+        return None
     
     if result.retcode == mt5.TRADE_RETCODE_DONE:
         print(f"\n{'='*60}")
         print(f"✅ ORDER EXECUTED: {action}")
         print(f"   Entry: {price:.2f} | Vol: {volume}{multiplier_info}")
-        print(f"   SL: {sl:.2f} | TP: {tp:.2f}")
+        print(f"   SL: {sl:.2f} (500pts) | TP: None (exit on signal)")
         print(f"   Ticket: #{result.order}")
         print(f"{'='*60}")
     else:
         print(f"❌ Order Failed: {action} | Code: {result.retcode}")
     
-    return result, price, sl, tp
+    return result, price, sl
 
-def main():
-    print("Soldier Agent Starting...")
-    
-    # Initialize MT5
-    if not initialize_mt5():
-        print("MT5 Init Failed")
-        return
-        
-    # Initialize Symbol
-    if not initialize_symbol():
-        print("Symbol Init Failed. Exiting.")
-        mt5.shutdown()
-        return
+# ============ SHARED STATE ============
+class SharedState:
+    def __init__(self, model, guardian):
+        self.model = model
+        self.guardian = guardian
+        self.last_trade_time = 0
+        self.last_known_tickets = set()
+        self.last_known_positions = {}
+        self.bot_closed_tickets = set()
+        self.running = True
 
-    # Load Model (LightGBM)
-    model = lgb.Booster(model_file=MODEL_PATH)
-    print("LightGBM Model Loaded")
+# ============ ASYNC TASK: POSITION MONITOR ============
+async def position_monitor(state):
+    """Monitors open positions: trailing stop, smart exits, closure detection"""
+    print("📊 Position Monitor started")
     
-    # Initialize Risk Guardian (Kill Switch)
-    guardian = RiskGuardian(config)
-    
-    # Track last known positions to detect closures
-    last_known_tickets = set()
-    last_known_positions = {}  # Store position details for closure logging
-    bot_closed_tickets = set()
-
-    print("Entering main loop...")
-    while True:
+    while state.running:
         try:
-            # Check connection
             if not mt5.terminal_info():
-                print("Connection lost, reconnecting...")
-                if not initialize_mt5():
-                    time.sleep(5)
-                    continue
-            
-            # === KILL SWITCH CHECK ===
-            can_trade, reason = guardian.can_trade()
-            if not can_trade:
-                print(f"🛑 KILL SWITCH: {reason}")
-                time.sleep(60)  # Check again in 1 minute
+                await asyncio.sleep(5)
                 continue
             
-            # 1. Read General's Bias
             bias = load_bias()
-            
-            # 2. Check Open Positions & Manage Them
             positions = mt5.positions_get(symbol=SYMBOL)
             current_tickets = set()
             
             if positions:
                 current_tickets = {p.ticket for p in positions}
-                # Track position details for closure logging
+                
                 for p in positions:
-                    if p.ticket not in last_known_positions:
-                        last_known_positions[p.ticket] = {
+                    # Track position details
+                    if p.ticket not in state.last_known_positions:
+                        state.last_known_positions[p.ticket] = {
                             'type': 'BUY' if p.type == mt5.ORDER_TYPE_BUY else 'SELL',
                             'open_price': p.price_open,
-                            'volume': p.volume,
-                            'sl': p.sl,
-                            'tp': p.tp
+                            'volume': p.volume
                         }
+                    
+                    tick = mt5.symbol_info_tick(SYMBOL)
+                    symbol_info = mt5.symbol_info(SYMBOL)
+                    point = symbol_info.point
+                    
+                    pos_type = 'BUY' if p.type == mt5.ORDER_TYPE_BUY else 'SELL'
+                    
+                    if pos_type == 'BUY':
+                        current_profit_points = (tick.bid - p.price_open) / point
+                    else:
+                        current_profit_points = (p.price_open - tick.ask) / point
+                    
+                    # TRAILING STOP
+                    if current_profit_points > TRAILING_STOP_START:
+                        if pos_type == 'BUY':
+                            new_sl = tick.bid - TRAILING_STOP_START * point
+                            if new_sl > p.sl + TRAILING_STEP * point:
+                                request = {
+                                    "action": mt5.TRADE_ACTION_SLTP,
+                                    "symbol": SYMBOL,
+                                    "position": p.ticket,
+                                    "sl": new_sl,
+                                    "tp": p.tp,
+                                }
+                                result = mt5.order_send(request)
+                                if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                    print(f"📈 Trailing SL: #{p.ticket} → {new_sl:.2f}")
+                        else:
+                            new_sl = tick.ask + TRAILING_STOP_START * point
+                            if p.sl == 0 or new_sl < p.sl - TRAILING_STEP * point:
+                                request = {
+                                    "action": mt5.TRADE_ACTION_SLTP,
+                                    "symbol": SYMBOL,
+                                    "position": p.ticket,
+                                    "sl": new_sl,
+                                    "tp": p.tp,
+                                }
+                                result = mt5.order_send(request)
+                                if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                    print(f"📉 Trailing SL: #{p.ticket} → {new_sl:.2f}")
+                    
+                    # SMART EXIT
+                    should_close = False
+                    close_reason = ""
+                    
+                    if pos_type == 'BUY':
+                        if bias == "BEARISH_SCALPING" and current_profit_points > 50:
+                            should_close = True
+                            close_reason = f"Take profit +{current_profit_points:.0f}pts"
+                        elif current_profit_points < -CUT_LOSS_POINTS:
+                            should_close = True
+                            close_reason = f"Cut loss {current_profit_points:.0f}pts"
+                    elif pos_type == 'SELL':
+                        if bias == "BULLISH_SCALPING" and current_profit_points > 50:
+                            should_close = True
+                            close_reason = f"Take profit +{current_profit_points:.0f}pts"
+                        elif current_profit_points < -CUT_LOSS_POINTS:
+                            should_close = True
+                            close_reason = f"Cut loss {current_profit_points:.0f}pts"
+                    
+                    if should_close:
+                        close_result = close_position(p)
+                        if close_result and close_result.retcode == mt5.TRADE_RETCODE_DONE:
+                            emoji = "💰" if current_profit_points > 0 else "💸"
+                            print(f"{emoji} Closed #{p.ticket}: {close_reason}")
+                            state.bot_closed_tickets.add(p.ticket)
             
-            # Detect closed positions (SL/TP or Manual)
-            missing_tickets = last_known_tickets - current_tickets
+            # Detect external closures
+            missing_tickets = state.last_known_tickets - current_tickets
+            external_closures = missing_tickets - state.bot_closed_tickets
             
-            # Filter out ones we closed ourselves
-            external_closures = missing_tickets - bot_closed_tickets
-            
-            # Log closed positions with details
             if external_closures:
                 for ticket in external_closures:
-                    pos_info = last_known_positions.get(ticket, {})
-                    pos_type = pos_info.get('type', '?')
-                    open_price = pos_info.get('open_price', 0)
-                    
-                    # Get deal history to find profit
+                    pos_info = state.last_known_positions.get(ticket, {})
                     deals = mt5.history_deals_get(position=ticket)
                     if deals and len(deals) > 0:
                         close_deal = deals[-1]
                         profit = close_deal.profit
-                        close_price = close_deal.price
-                        
                         emoji = "💰" if profit > 0 else "💸"
-                        result = "PROFIT" if profit > 0 else "LOSS"
-                        
-                        print(f"\n{'='*60}")
-                        print(f"{emoji} POSITION CLOSED: {pos_type} #{ticket}")
-                        print(f"   Open: {open_price:.2f} → Close: {close_price:.2f}")
-                        print(f"   Result: {result} ${profit:.2f}")
-                        print(f"{'='*60}")
-                    else:
-                        print(f"\n📍 Position #{ticket} closed (details unavailable)")
-                    
-                    # Clean up tracking
-                    last_known_positions.pop(ticket, None)
+                        print(f"{emoji} Position #{ticket} closed: ${profit:.2f}")
+                    state.last_known_positions.pop(ticket, None)
             
-            bot_closed_tickets.clear()
-                
-            last_known_tickets = current_tickets
+            state.bot_closed_tickets.clear()
+            state.last_known_tickets = current_tickets
             
-            # 3. Get Data & Features
+            await asyncio.sleep(1)  # Check every second
+            
+        except Exception as e:
+            print(f"Position Monitor Error: {e}")
+            await asyncio.sleep(5)
+
+# ============ ASYNC TASK: SIGNAL FINDER ============
+async def signal_finder(state):
+    """Finds trading signals and executes entries"""
+    print("🔍 Signal Finder started")
+    
+    while state.running:
+        try:
+            if not mt5.terminal_info():
+                await asyncio.sleep(5)
+                continue
+            
+            # Kill Switch Check
+            can_trade, reason = state.guardian.can_trade()
+            if not can_trade:
+                print(f"🛑 KILL SWITCH: {reason}")
+                await asyncio.sleep(60)
+                continue
+            
+            # Cooldown Check
+            cooldown_remaining = (state.last_trade_time + TRADE_COOLDOWN) - time.time()
+            if cooldown_remaining > 0:
+                await asyncio.sleep(1)
+                continue
+            
+            # Get Data & Features
             df = get_data()
             if df is None:
-                print("Waiting for data (mt5.copy_rates returned None)...", end="\r")
-                time.sleep(1)
+                await asyncio.sleep(1)
                 continue
-                
+            
             X_pred, last_candle = calculate_features(df)
+            bias = load_bias()
+            prob = state.model.predict(X_pred)[0]
             
-            # 4. LightGBM Prediction
-            prob = model.predict(X_pred)[0]  # Probability of UP
-            
-            # 5. Logic Variables
             current_price = last_candle['close']
             rsi = last_candle['rsi_14']
-            lower_band = last_candle['boll_lb']
             upper_band = last_candle['boll_ub']
+            lower_band = last_candle['boll_lb']
             ema = last_candle['close_10_ema']
             
-            # Detailed Logging
-            pos_count = len(positions) if positions else 0
-            print(f"Bias: {bias} | Pos: {pos_count} | Price: {current_price:.2f} | RSI: {rsi:.2f} | BB_L: {lower_band:.2f} | BB_U: {upper_band:.2f} | Prob(UP): {prob:.2f}")
+            positions = mt5.positions_get(symbol=SYMBOL)
+            num_positions = len(positions) if positions else 0
             
-            # Print Interpretation
-            explanation = interpret_state(bias, rsi, prob, current_price, lower_band, upper_band, ema)
-            print(f"--> {explanation}", end="\r", flush=True)
+            # Print status
+            print(f"Bias: {bias} | Pos: {num_positions} | Price: {current_price:.2f} | RSI: {rsi:.2f} | Prob(UP): {prob:.2f}", end="\r")
             
-            # Save State for Dashboard
-            save_state(bias, rsi, prob, current_price, lower_band, upper_band, explanation, positions)
-
-            # --- MANAGE OPEN POSITIONS (Exit Logic) ---
-            if positions:
-                for pos in positions:
-                    profit = pos.profit
-                    pos_type = "BUY" if pos.type == mt5.ORDER_TYPE_BUY else "SELL"
-                    
-                    # Apply Trailing Stop
-                    check_trailing_stop(pos)
-                    
-                    should_close = False
-                    reason = ""
-                    
-                    if pos_type == "BUY":
-                        if current_price >= upper_band:
-                            should_close = True
-                            reason = "Target (Upper Band) Hit"
-                        elif rsi > 75:
-                            should_close = True
-                            reason = "RSI Overbought"
-                        elif prob < 0.4:
-                            should_close = True
-                            reason = "Model Reversal"
-                            
-                    elif pos_type == "SELL":
-                        if current_price <= lower_band:
-                            should_close = True
-                            reason = "Target (Lower Band) Hit"
-                        elif rsi < 25:
-                            should_close = True
-                            reason = "RSI Oversold"
-                        elif prob > 0.6:
-                            should_close = True
-                            reason = "Model Reversal"
-                    
-                    if should_close:
-                        outcome = "PROFIT" if profit > 0 else "LOSS"
-                        symbol_str = "+++" if profit > 0 else "---"
-                        print(f"\n{symbol_str} CLOSING {pos_type} ({outcome}) | Profit: {profit:.2f} | Reason: {reason}")
-                        res = close_position(pos)
-                        if res.retcode == mt5.TRADE_RETCODE_DONE:
-                            bot_closed_tickets.add(pos.ticket)
-                        time.sleep(1)
-                
-                # Stack Logic: If we have positions but less than MAX, we can still enter
-                if len(positions) >= MAX_POSITIONS:
-                    time.sleep(0.5)
-                    continue 
-
-            # --- ENTRY LOGIC (Score-Based System) ---
+            if num_positions >= MAX_POSITIONS:
+                await asyncio.sleep(5)
+                continue
+            
+            # Entry Logic
             action = "HOLD"
-            ema = last_candle['close_10_ema']
-            macd_slope = last_candle.get('rsi_slope', 0)  # Using RSI slope as momentum proxy
-            
-            ENTRY_THRESHOLD = 3  # Minimum score to enter (out of max ~5-6)
+            ENTRY_THRESHOLD = 3
             
             if bias == "BULLISH_SCALPING":
                 score = 0
                 reasons = []
-                
-                # MODEL VETO: If model strongly disagrees, don't enter
                 if prob < 0.35:
-                    score = -99  # Veto any entry
-                    reasons.append("MODEL_VETO")
+                    score = -99
                 else:
-                    # Score conditions for BUY
-                    if current_price <= lower_band * 1.005:  # Near lower band (dip)
+                    if current_price <= lower_band * 1.005:
                         score += 2
                         reasons.append("DIP")
-                    if rsi < 45:  # RSI not overbought
+                    if rsi < 45:
                         score += 1
                         reasons.append(f"RSI:{rsi:.0f}")
-                    if prob > 0.48:  # Model slightly bullish
+                    if prob > 0.48:
                         score += 1
                         reasons.append(f"PROB:{prob:.2f}")
-                    if current_price > ema:  # Above trend
+                    if current_price > ema:
                         score += 1
                         reasons.append("TREND")
-                    if prob > 0.55:  # Strong model signal (bonus)
-                        score += 1
-                        reasons.append("STRONG_PROB")
-                    
+                
                 if score >= ENTRY_THRESHOLD:
-                    print(f"\nSIGNAL: BUY (Score: {score}) | {' + '.join(reasons)} | Price: {current_price:.2f}")
+                    print(f"\nSIGNAL: BUY (Score: {score}) | {' + '.join(reasons)}")
                     action = "BUY"
                     
             elif bias == "BEARISH_SCALPING":
                 score = 0
                 reasons = []
-                
-                # MODEL VETO: If model strongly disagrees, don't enter
                 if prob > 0.65:
-                    score = -99  # Veto any entry
-                    reasons.append("MODEL_VETO")
+                    score = -99
                 else:
-                    # Score conditions for SELL
-                    if current_price >= upper_band * 0.995:  # Near upper band (peak)
+                    if current_price >= upper_band * 0.995:
                         score += 2
                         reasons.append("PEAK")
-                    if rsi > 55:  # RSI not oversold
+                    if rsi > 55:
                         score += 1
                         reasons.append(f"RSI:{rsi:.0f}")
-                    if prob < 0.52:  # Model slightly bearish
+                    if prob < 0.52:
                         score += 1
                         reasons.append(f"PROB:{prob:.2f}")
-                    if current_price < ema:  # Below trend
+                    if current_price < ema:
                         score += 1
                         reasons.append("TREND")
-                    if prob < 0.45:  # Strong model signal (bonus)
+                    if prob < 0.45:
                         score += 1
                         reasons.append("STRONG_PROB")
-                    
+                
                 if score >= ENTRY_THRESHOLD:
-                    print(f"\nSIGNAL: SELL (Score: {score}) | {' + '.join(reasons)} | Price: {current_price:.2f}")
+                    print(f"\nSIGNAL: SELL (Score: {score}) | {' + '.join(reasons)}")
                     action = "SELL"
             
-            # 6. Execute Entry
+            # Execute Trade
             if action != "HOLD":
-                # Get lot multiplier from Risk Guardian (drawdown protection)
-                lot_multiplier = guardian.get_lot_multiplier()
+                lot_multiplier = state.guardian.get_lot_multiplier()
                 result = execute_trade(action, lot_multiplier)
                 if result:
-                    res, entry_price, sl, tp = result
+                    res, entry_price, sl = result
                     if res.retcode == mt5.TRADE_RETCODE_DONE:
-                        pass  # Logging already done in execute_trade
-                time.sleep(60) # Wait 1 min after trade to avoid double entry
+                        state.last_trade_time = time.time()
             
-            time.sleep(0.2) # Tick loop
+            await asyncio.sleep(2)  # Check signals every 2 seconds
             
         except Exception as e:
-            print(f"\nError in loop: {e}")
+            print(f"Signal Finder Error: {e}")
             traceback.print_exc()
-            # Try to reconnect on error
-            initialize_mt5()
-            time.sleep(5)
+            await asyncio.sleep(5)
+
+# ============ MAIN ASYNC ENTRY ============
+async def main_async():
+    print("Soldier Agent Starting (Async Mode)...")
+    
+    # Initialize MT5
+    if not initialize_mt5():
+        print("MT5 Init Failed")
+        return
+    
+    # Initialize Symbol
+    if not initialize_symbol():
+        print("Symbol Init Failed. Exiting.")
+        mt5.shutdown()
+        return
+    
+    # Load Model
+    model = lgb.Booster(model_file=MODEL_PATH)
+    print("LightGBM Model Loaded")
+    
+    # Initialize Risk Guardian
+    guardian = RiskGuardian(config)
+    
+    # Create Shared State
+    state = SharedState(model, guardian)
+    
+    print("Starting async tasks...")
+    
+    # Run both tasks concurrently
+    await asyncio.gather(
+        position_monitor(state),
+        signal_finder(state)
+    )
+
+def main():
+    asyncio.run(main_async())
 
 if __name__ == "__main__":
     try:

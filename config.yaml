@@ -12,18 +12,20 @@ bias_file: "bias.json"
 
 # Trading Parameters
 volume: 0.01
-risk_percent: 0.02 # 2% risk per trade (affects dynamic lot size)
-sl_points: 500
-tp_points: 500
+risk_percent: 0.005 # 0.5% risk per trade (smaller lots: 0.01-0.05)
+sl_points: 8000 # Wide SL (like reference bot - lets positions breathe)
+tp_points: 500 # Not used (exit on signal change)
 max_spread: 180
+cut_loss_points: 10000 # Cut loss if position goes -10000 points (change as needed)
 
-# Trailing Stop
-trailing_stop_start: 200
-trailing_step: 50
+# Trailing Stop (aggressive settings)
+trailing_stop_start: 50 # Start trailing after only 50 points of profit
+trailing_step: 25 # Move SL every 25 points
 
 # Strategy
-max_positions: 5
-interval_seconds: 900 # General Agent loop interval
+max_positions: 6 # Like reference bot (can hold 6 positions simultaneously)
+interval_seconds: 340 # General Agent loop interval
+trade_cooldown: 120 # Seconds to wait after opening a trade before opening another
 
 # Kill Switch Risk Management
 kill_switch:
