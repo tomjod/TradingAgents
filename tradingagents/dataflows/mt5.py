@@ -172,13 +172,26 @@ def _get_mt5_data_df(symbol, start_date, end_date):
 
 def get_mt5_indicators(
     symbol: Annotated[str, "ticker symbol"],
-    indicator: Annotated[str, "technical indicator"],
+    indicator: Annotated[str, "technical indicator or comma-separated list like 'rsi,macd,boll'"],
     curr_date: Annotated[str, "current date yyyy-mm-dd"],
     look_back_days: Annotated[int, "look back days"],
 ) -> str:
     try:
         from stockstats import wrap
         from dateutil.relativedelta import relativedelta
+        
+        # Validate indicator parameter
+        if not indicator or indicator.strip() == "":
+            return """ERROR: No indicator specified. You MUST specify which indicators to retrieve.
+
+Available indicators:
+- Moving Averages: close_50_sma, close_200_sma, close_10_ema
+- MACD: macd, macds, macdh
+- Momentum: rsi
+- Volatility: boll, boll_ub, boll_lb, atr
+- Volume: vwma
+
+Example: Call get_indicators with indicator='rsi,macd,boll' """
         
         # Calculate start date for data fetching (go back enough for indicators)
         curr_date_dt = datetime.strptime(curr_date, "%Y-%m-%d")

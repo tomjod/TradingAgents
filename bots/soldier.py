@@ -1,5 +1,6 @@
 import MetaTrader5 as mt5
 import pandas as pd
+import numpy as np
 import xgboost as xgb
 from stockstats import wrap
 import time
@@ -14,6 +15,15 @@ import yaml
 
 # Add project root to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Numba JIT-compiled functions for HFT optimization (must be after sys.path setup)
+from bots.numba_indicators import (
+    calculate_slopes,
+    calculate_bb_metrics,
+    calculate_vol_trend,
+    calculate_trailing_stop,
+    calculate_dynamic_lot
+)
 
 # Load environment variables
 load_dotenv()
@@ -188,26 +198,35 @@ def calculate_features(df):
     _ = stock['atr']
     _ = stock['cci']
     _ = stock['adx']
-    _ = stock['close_10_ema'] # For Trend Logic
+    _ = stock['close_10_ema']  # For Trend Logic
     
     # Convert back to DF to ensure columns exist for custom calc
     df_calc = pd.DataFrame(stock)
     
-    # 2. Advanced Features (Slopes & Trends)
-    # RSI Slope (Change over last 3 periods)
-    df_calc['rsi_slope'] = df_calc['rsi_14'] - df_calc['rsi_14'].shift(3)
-
-    # MACD Slope
-    df_calc['macd_slope'] = df_calc['macd'] - df_calc['macd'].shift(3)
-
-    # Bollinger Band Width (Volatility)
-    df_calc['bb_width'] = (df_calc['boll_ub'] - df_calc['boll_lb']) / df_calc['boll']
-
-    # Distance from MA
-    df_calc['dist_ma'] = (df_calc['close'] - df_calc['boll']) / df_calc['boll']
-
-    # Volume Trend
-    df_calc['vol_trend'] = df_calc['volume'] / df_calc['volume'].rolling(20).mean()
+    # 2. Advanced Features using Numba JIT (C-speed calculations)
+    # Extract numpy arrays for JIT functions
+    rsi_array = df_calc['rsi_14'].to_numpy(dtype=np.float64)
+    macd_array = df_calc['macd'].to_numpy(dtype=np.float64)
+    volume_array = df_calc['volume'].to_numpy(dtype=np.float64)
+    
+    # JIT-compiled slope calculations
+    rsi_slope, macd_slope = calculate_slopes(rsi_array, macd_array)
+    df_calc.loc[df_calc.index[-1], 'rsi_slope'] = rsi_slope
+    df_calc.loc[df_calc.index[-1], 'macd_slope'] = macd_slope
+    
+    # JIT-compiled Bollinger metrics
+    last_idx = df_calc.index[-1]
+    bb_width, dist_ma = calculate_bb_metrics(
+        df_calc.loc[last_idx, 'close'],
+        df_calc.loc[last_idx, 'boll'],
+        df_calc.loc[last_idx, 'boll_ub'],
+        df_calc.loc[last_idx, 'boll_lb']
+    )
+    df_calc.loc[last_idx, 'bb_width'] = bb_width
+    df_calc.loc[last_idx, 'dist_ma'] = dist_ma
+    
+    # JIT-compiled volume trend
+    df_calc.loc[last_idx, 'vol_trend'] = calculate_vol_trend(volume_array)
     
     # Return the last row as a DataFrame for prediction (keeping feature names)
     features = [
@@ -251,48 +270,71 @@ def close_position(position):
 def calculate_dynamic_volume(sl_points):
     """
     Calculates dynamic lot size based on risk percentage of equity.
+    Uses Numba JIT-compiled function for C-speed calculation.
     """
-    RISK_PERCENT = 0.01 # 1% Risk per trade
+    RISK_PERCENT = 0.01  # 1% Risk per trade
     
     account_info = mt5.account_info()
     if account_info is None:
-        return VOLUME # Fallback to fixed
+        return VOLUME  # Fallback to fixed
         
-    equity = account_info.equity
-    risk_amount = equity * RISK_PERCENT
-    
     symbol_info = mt5.symbol_info(SYMBOL)
     if symbol_info is None:
         return VOLUME
-        
-    tick_value = symbol_info.trade_tick_value
-    tick_size = symbol_info.trade_tick_size
-    point = symbol_info.point
     
-    if tick_size == 0 or tick_value == 0:
-        return VOLUME
-        
-    # Loss per 1 lot for SL_Points
-    loss_per_lot = (sl_points * point) * (tick_value / tick_size)
-    
-    if loss_per_lot == 0:
-        return VOLUME
-        
-    calc_volume = risk_amount / loss_per_lot
-    
-    # Normalize to step
-    step = symbol_info.volume_step
-    min_vol = symbol_info.volume_min
-    max_vol = symbol_info.volume_max
-    
-    # Round to step
-    calc_volume = round(calc_volume / step) * step
-    
-    # Clamp
-    if calc_volume < min_vol: calc_volume = min_vol
-    if calc_volume > max_vol: calc_volume = max_vol
+    # Use JIT-compiled function for fast calculation
+    calc_volume = calculate_dynamic_lot(
+        equity=float(account_info.equity),
+        risk_percent=RISK_PERCENT,
+        sl_points=float(sl_points),
+        point=float(symbol_info.point),
+        tick_value=float(symbol_info.trade_tick_value),
+        tick_size=float(symbol_info.trade_tick_size),
+        volume_step=float(symbol_info.volume_step),
+        volume_min=float(symbol_info.volume_min),
+        volume_max=float(symbol_info.volume_max)
+    )
     
     return float(f"{calc_volume:.2f}")
+
+def save_state(bias, rsi, prob, price, lower_band, upper_band, interpretation, positions):
+    """
+    Saves the current bot state to state.json for the dashboard.
+    """
+    state_file = os.path.join(PROJECT_ROOT, "state.json")
+    
+    pos_list = []
+    if positions:
+        for p in positions:
+            pos_list.append({
+                "ticket": int(p.ticket),
+                "type": "BUY" if p.type == mt5.ORDER_TYPE_BUY else "SELL",
+                "volume": float(p.volume),
+                "profit": float(p.profit),
+                "open_price": float(p.price_open)
+            })
+            
+    data = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "symbol": SYMBOL,
+        "price": float(price),
+        "bias": bias,
+        "rsi": float(rsi),
+        "prob_up": float(prob),
+        "lower_band": float(lower_band),
+        "upper_band": float(upper_band),
+        "interpretation": interpretation,
+        "positions": pos_list
+    }
+    
+    try:
+        # Write to temp file then rename to avoid read conflicts
+        temp_file = state_file + ".tmp"
+        with open(temp_file, "w") as f:
+            json.dump(data, f)
+        os.replace(temp_file, state_file)
+    except Exception as e:
+        print(f"Error saving state: {e}")
 
 def interpret_state(bias, rsi, prob, price, lower_band, upper_band, ema):
     """
@@ -459,6 +501,9 @@ def main():
             # Print Interpretation
             explanation = interpret_state(bias, rsi, prob, current_price, lower_band, upper_band, ema)
             print(f"--> {explanation}", end="\r", flush=True)
+            
+            # Save State for Dashboard
+            save_state(bias, rsi, prob, current_price, lower_band, upper_band, explanation, positions)
 
             # --- MANAGE OPEN POSITIONS (Exit Logic) ---
             if positions:
@@ -508,29 +553,72 @@ def main():
                     time.sleep(0.5)
                     continue 
 
-            # --- ENTRY LOGIC ---
+            # --- ENTRY LOGIC (Score-Based System) ---
             action = "HOLD"
             ema = last_candle['close_10_ema']
+            macd_slope = last_candle.get('rsi_slope', 0)  # Using RSI slope as momentum proxy
+            
+            ENTRY_THRESHOLD = 3  # Minimum score to enter (out of max ~5-6)
             
             if bias == "BULLISH_SCALPING":
-                # 1. Mean Reversion (Buy Dip)
-                if current_price <= lower_band * 1.0005 and rsi < 40 and prob > 0.5:
-                    print(f"\nSIGNAL: DIP BUY | Price: {current_price} | LB: {lower_band} | RSI: {rsi} | Prob: {prob}")
+                score = 0
+                reasons = []
+                
+                # MODEL VETO: If model strongly disagrees, don't enter
+                if prob < 0.35:
+                    score = -99  # Veto any entry
+                    reasons.append("MODEL_VETO")
+                else:
+                    # Score conditions for BUY
+                    if current_price <= lower_band * 1.005:  # Near lower band (dip)
+                        score += 2
+                        reasons.append("DIP")
+                    if rsi < 45:  # RSI not overbought
+                        score += 1
+                        reasons.append(f"RSI:{rsi:.0f}")
+                    if prob > 0.48:  # Model slightly bullish
+                        score += 1
+                        reasons.append(f"PROB:{prob:.2f}")
+                    if current_price > ema:  # Above trend
+                        score += 1
+                        reasons.append("TREND")
+                    if prob > 0.55:  # Strong model signal (bonus)
+                        score += 1
+                        reasons.append("STRONG_PROB")
+                    
+                if score >= ENTRY_THRESHOLD:
+                    print(f"\nSIGNAL: BUY (Score: {score}) | {' + '.join(reasons)} | Price: {current_price:.2f}")
                     action = "BUY"
-                # 2. Trend Following (Momentum Buy)
-                elif current_price > ema and rsi > 50 and prob > 0.6:
-                     print(f"\nSIGNAL: MOMENTUM BUY | Price: {current_price} | EMA: {ema} | RSI: {rsi} | Prob: {prob}")
-                     action = "BUY"
                     
             elif bias == "BEARISH_SCALPING":
-                # 1. Mean Reversion (Sell Peak)
-                if current_price >= upper_band * 0.9995 and rsi > 60 and prob < 0.5:
-                    print(f"\nSIGNAL: PEAK SELL | Price: {current_price} | UB: {upper_band} | RSI: {rsi} | Prob: {prob}")
+                score = 0
+                reasons = []
+                
+                # MODEL VETO: If model strongly disagrees, don't enter
+                if prob > 0.65:
+                    score = -99  # Veto any entry
+                    reasons.append("MODEL_VETO")
+                else:
+                    # Score conditions for SELL
+                    if current_price >= upper_band * 0.995:  # Near upper band (peak)
+                        score += 2
+                        reasons.append("PEAK")
+                    if rsi > 55:  # RSI not oversold
+                        score += 1
+                        reasons.append(f"RSI:{rsi:.0f}")
+                    if prob < 0.52:  # Model slightly bearish
+                        score += 1
+                        reasons.append(f"PROB:{prob:.2f}")
+                    if current_price < ema:  # Below trend
+                        score += 1
+                        reasons.append("TREND")
+                    if prob < 0.45:  # Strong model signal (bonus)
+                        score += 1
+                        reasons.append("STRONG_PROB")
+                    
+                if score >= ENTRY_THRESHOLD:
+                    print(f"\nSIGNAL: SELL (Score: {score}) | {' + '.join(reasons)} | Price: {current_price:.2f}")
                     action = "SELL"
-                # 2. Trend Following (Momentum Sell)
-                elif current_price < ema and rsi < 50 and prob < 0.4:
-                     print(f"\nSIGNAL: MOMENTUM SELL | Price: {current_price} | EMA: {ema} | RSI: {rsi} | Prob: {prob}")
-                     action = "SELL"
             
             # 6. Execute Entry
             if action != "HOLD":

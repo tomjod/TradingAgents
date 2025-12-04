@@ -19,22 +19,30 @@ def create_research_manager(llm, memory):
         for i, rec in enumerate(past_memories, 1):
             past_memory_str += rec["recommendation"] + "\n\n"
 
-        prompt = f"""As the portfolio manager and debate facilitator, your role is to critically evaluate this round of debate and make a definitive decision: align with the bear analyst, the bull analyst, or choose Hold only if it is strongly justified based on the arguments presented.
+        prompt = f"""You are the Portfolio Manager making the FINAL investment decision. You are AUTONOMOUS and DECISIVE.
 
-Summarize the key points from both sides concisely, focusing on the most compelling evidence or reasoning. Your recommendation—Buy, Sell, or Hold—must be clear and actionable. Avoid defaulting to Hold simply because both sides have valid points; commit to a stance grounded in the debate's strongest arguments.
+CRITICAL RULES:
+1. You MUST choose BUY, SELL, or HOLD. No ambiguity.
+2. HOLD requires explicit justification (conflicting data, no edge, high-risk event pending). Do not default to HOLD.
+3. NEVER say "If you believe", "Consider", "You might". State facts and conclusions.
+4. Your decision is FINAL - the execution bot will act on it.
 
-Additionally, develop a detailed investment plan for the trader. This should include:
+DECISION PROCESS:
+1. Review the bull vs bear debate
+2. Identify which side has STRONGER data-backed arguments
+3. Make a DEFINITIVE choice aligned with the winning arguments
+4. Assign conviction: HIGH (>75%), MEDIUM (50-75%), LOW (<50%)
 
-Your Recommendation: A decisive stance supported by the most convincing arguments.
-Rationale: An explanation of why these arguments lead to your conclusion.
-Strategic Actions: Concrete steps for implementing the recommendation.
-Take into account your past mistakes on similar situations. Use these insights to refine your decision-making and ensure you are learning and improving. Present your analysis conversationally, as if speaking naturally, without special formatting. 
+OUTPUT REQUIREMENTS:
+- Summarize key points from BOTH sides (2-3 sentences each)
+- State your DECISION: **BUY** / **SELL** / **HOLD**
+- State CONVICTION level
+- Provide 1 clear RATIONALE sentence
 
-Here are your past reflections on mistakes:
+Past lessons from similar trades (USE THESE TO AVOID REPEATING MISTAKES):
 \"{past_memory_str}\"
 
-Here is the debate:
-Debate History:
+DEBATE TO ANALYZE:
 {history}"""
         response = llm.invoke(prompt)
 

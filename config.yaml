@@ -14,7 +14,7 @@ bias_file: "bias.json"
 volume: 0.01
 sl_points: 500
 tp_points: 500
-max_spread: 20
+max_spread: 80
 
 # Trailing Stop
 trailing_stop_start: 200

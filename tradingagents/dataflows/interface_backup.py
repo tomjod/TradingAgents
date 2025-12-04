@@ -163,18 +163,6 @@ def get_vendor(category: str, method: str = None) -> str:
 
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
-    # Import cache functions
-    from .cache import get_cached, set_cached
-    
-    # Skip cache for trading execution (always need fresh data)
-    skip_cache = method in ("execute_order", "get_open_positions", "get_trade_history")
-    
-    # Check cache first
-    if not skip_cache:
-        cached_result = get_cached(method, args, kwargs)
-        if cached_result is not None:
-            return cached_result
-    
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
 
@@ -271,15 +259,9 @@ def route_to_vendor(method: str, *args, **kwargs):
     else:
         print(f"FINAL: Method '{method}' completed with {len(results)} result(s) from {vendor_attempt_count} vendor attempt(s)")
 
-    # Build final result
+    # Return single result if only one, otherwise concatenate as string
     if len(results) == 1:
-        final_result = results[0]
+        return results[0]
     else:
         # Convert all results to strings and concatenate
-        final_result = '\n'.join(str(result) for result in results)
-    
-    # Store in cache
-    if not skip_cache:
-        set_cached(method, args, kwargs, final_result)
-    
-    return final_result
+        return '\n'.join(str(result) for result in results)

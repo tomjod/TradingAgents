@@ -1,5 +1,54 @@
 from .alpha_vantage_common import _make_api_request
 
+# Commodity tickers that don't have traditional fundamentals
+COMMODITY_PATTERNS = {"XAUUSD", "XAGUSD", "GOLD", "SILVER", "GC", "SI", "CL", "NG"}
+
+
+def _is_commodity(ticker: str) -> bool:
+    """Check if ticker is a commodity."""
+    # Remove common suffixes like 'm' for micro contracts
+    clean_ticker = ticker.upper().rstrip("M")
+    return any(pattern in clean_ticker for pattern in COMMODITY_PATTERNS)
+
+
+def _get_commodity_fundamentals(ticker: str) -> str:
+    """Return macro context for commodity tickers."""
+    if "XAU" in ticker.upper() or "GOLD" in ticker.upper():
+        return """## XAUUSD (Gold) - Macro Fundamentals
+
+Gold is a commodity, not a stock. Traditional fundamentals don't apply. Key drivers:
+
+**1. USD Strength (DXY Index)**
+- Inverse correlation: DXY up → Gold down
+- Watch Fed policy, Treasury yields
+
+**2. Interest Rates**
+- Higher rates = lower gold (opportunity cost of holding non-yielding asset)
+- Real rates (nominal - inflation) matter most
+
+**3. Inflation Expectations**
+- Gold is a hedge against inflation
+- CPI data and inflation breakevens are key
+
+**4. Geopolitical Risk**
+- Safe-haven asset during crises, wars, uncertainty
+- Flight to quality during market stress
+
+**5. Central Bank Buying**
+- Central banks are net buyers (especially China, Russia, India)
+- Supports long-term demand
+
+**Current Macro Regime Factors to Consider:**
+- Fed rate path (hawkish/dovish)
+- US economic data (jobs, GDP, PMI)
+- Geopolitical tensions
+- Dollar liquidity conditions"""
+    else:
+        return f"""## {ticker} - Commodity Fundamentals
+
+This is a commodity ticker. Traditional stock fundamentals (P/E, revenue, etc.) don't apply.
+Key drivers: Supply/demand, USD strength, interest rates, and macro conditions."""
+
 
 def get_fundamentals(ticker: str, curr_date: str = None) -> str:
     """
@@ -12,6 +61,10 @@ def get_fundamentals(ticker: str, curr_date: str = None) -> str:
     Returns:
         str: Company overview data including financial ratios and key metrics
     """
+    # Handle commodities specially
+    if _is_commodity(ticker):
+        return _get_commodity_fundamentals(ticker)
+    
     params = {
         "symbol": ticker,
     }
