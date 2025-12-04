@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,7 +8,10 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; }
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
         .glass {
             background: rgba(255, 255, 255, 0.05);
             backdrop-filter: blur(10px);
@@ -15,13 +19,15 @@
         }
     </style>
 </head>
+
 <body class="bg-slate-900 text-white min-h-screen p-6">
 
     <div class="max-w-6xl mx-auto">
         <!-- Header -->
         <header class="flex justify-between items-center mb-8">
             <div>
-                <h1 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">
+                <h1
+                    class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-emerald-400">
                     Soldier Bot Dashboard
                 </h1>
                 <p class="text-slate-400 text-sm mt-1">Real-time Scalping Monitor</p>
@@ -30,17 +36,38 @@
                 <div id="timestamp" class="text-slate-500 font-mono text-sm">Waiting for data...</div>
                 <div class="flex items-center justify-end gap-2 mt-1">
                     <span class="relative flex h-3 w-3">
-                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                      <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                        <span
+                            class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
                     </span>
                     <span class="text-xs text-emerald-400 font-semibold">LIVE</span>
                 </div>
             </div>
         </header>
 
+        <!-- Summary Stats -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div class="glass rounded-xl p-4 text-center">
+                <div class="text-slate-400 text-xs uppercase mb-1">Balance</div>
+                <div id="balance" class="text-2xl font-bold text-white">$---</div>
+            </div>
+            <div class="glass rounded-xl p-4 text-center">
+                <div class="text-slate-400 text-xs uppercase mb-1">Today P/L</div>
+                <div id="total-profit" class="text-2xl font-bold text-emerald-400">$---</div>
+            </div>
+            <div class="glass rounded-xl p-4 text-center">
+                <div class="text-slate-400 text-xs uppercase mb-1">Win Rate</div>
+                <div id="win-rate" class="text-2xl font-bold text-blue-400">---%</div>
+            </div>
+            <div class="glass rounded-xl p-4 text-center">
+                <div class="text-slate-400 text-xs uppercase mb-1">Trades</div>
+                <div id="total-trades" class="text-2xl font-bold text-purple-400">---</div>
+            </div>
+        </div>
+
         <!-- Main Grid -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            
+
             <!-- Price Card -->
             <div class="glass rounded-2xl p-6">
                 <h3 class="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-2">Market Price</h3>
@@ -74,7 +101,8 @@
                     <span id="prob" class="text-2xl font-bold text-white">---</span>
                 </div>
                 <div class="w-full bg-slate-800 rounded-full h-4">
-                    <div id="prob-bar" class="bg-purple-500 h-4 rounded-full transition-all duration-500" style="width: 0%"></div>
+                    <div id="prob-bar" class="bg-purple-500 h-4 rounded-full transition-all duration-500"
+                        style="width: 0%"></div>
                 </div>
                 <div class="flex justify-between text-xs text-slate-500 mt-2">
                     <span>Bearish (0.0)</span>
@@ -85,13 +113,14 @@
 
         <!-- Secondary Grid -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-             <!-- RSI Gauge -->
-             <div class="glass rounded-2xl p-6">
+            <!-- RSI Gauge -->
+            <div class="glass rounded-2xl p-6">
                 <h3 class="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-4">RSI Momentum</h3>
                 <div class="relative pt-1">
                     <div class="flex mb-2 items-center justify-between">
                         <div>
-                            <span id="rsi-badge" class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-600 bg-blue-200">
+                            <span id="rsi-badge"
+                                class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-blue-600 bg-blue-200">
                                 Neutral
                             </span>
                         </div>
@@ -102,7 +131,9 @@
                         </div>
                     </div>
                     <div class="overflow-hidden h-2 mb-4 text-xs flex rounded bg-slate-800">
-                        <div id="rsi-bar" style="width:0%" class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 transition-all duration-500"></div>
+                        <div id="rsi-bar" style="width:0%"
+                            class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-blue-500 transition-all duration-500">
+                        </div>
                     </div>
                     <div class="flex justify-between text-xs text-slate-500">
                         <span>0</span>
@@ -115,7 +146,7 @@
         </div>
 
         <!-- Positions Table -->
-        <div class="glass rounded-2xl p-6">
+        <div class="glass rounded-2xl p-6 mb-8">
             <h3 class="text-slate-400 text-sm font-semibold uppercase tracking-wider mb-4">Open Positions</h3>
             <div class="overflow-x-auto">
                 <table class="w-full text-left border-collapse">
@@ -129,9 +160,36 @@
                         </tr>
                     </thead>
                     <tbody id="positions-body" class="text-sm">
-                        <!-- Rows injected via JS -->
                         <tr>
                             <td colspan="5" class="py-4 text-center text-slate-500">No open positions</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Trade History Table -->
+        <div class="glass rounded-2xl p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-slate-400 text-sm font-semibold uppercase tracking-wider">Trade History (Last 7 Days)
+                </h3>
+                <button onclick="loadHistory()"
+                    class="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded-lg transition-colors">Refresh</button>
+            </div>
+            <div class="overflow-x-auto max-h-96">
+                <table class="w-full text-left border-collapse">
+                    <thead class="sticky top-0 bg-slate-800">
+                        <tr class="text-slate-400 text-xs border-b border-slate-700">
+                            <th class="py-3 px-4">Time</th>
+                            <th class="py-3 px-4">Type</th>
+                            <th class="py-3 px-4">Volume</th>
+                            <th class="py-3 px-4">Price</th>
+                            <th class="py-3 px-4 text-right">Profit</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-body" class="text-sm">
+                        <tr>
+                            <td colspan="5" class="py-4 text-center text-slate-500">Loading history...</td>
                         </tr>
                     </tbody>
                 </table>
@@ -159,7 +217,7 @@
                 document.getElementById('price').innerText = data.price.toFixed(2);
                 document.getElementById('lower-band').innerText = `LB: ${data.lower_band.toFixed(2)}`;
                 document.getElementById('upper-band').innerText = `UB: ${data.upper_band.toFixed(2)}`;
-                
+
                 // Price Bar (Relative to bands)
                 const range = data.upper_band - data.lower_band;
                 const pos = data.price - data.lower_band;
@@ -179,7 +237,7 @@
                 const rsi = data.rsi;
                 document.getElementById('rsi').innerText = rsi.toFixed(1);
                 document.getElementById('rsi-bar').style.width = `${rsi}%`;
-                
+
                 const rsiBadge = document.getElementById('rsi-badge');
                 if (rsi > 70) {
                     rsiBadge.innerText = "Overbought";
@@ -199,18 +257,18 @@
                 const prob = data.prob_up;
                 document.getElementById('prob').innerText = (prob * 100).toFixed(1) + "%";
                 document.getElementById('prob-bar').style.width = `${prob * 100}%`;
-                
+
                 // Update Positions
                 const tbody = document.getElementById('positions-body');
                 tbody.innerHTML = '';
-                
+
                 if (data.positions && data.positions.length > 0) {
                     data.positions.forEach(pos => {
                         const tr = document.createElement('tr');
                         tr.className = "border-b border-slate-700 hover:bg-slate-800 transition-colors";
                         const typeColor = pos.type === "BUY" ? "text-emerald-400" : "text-rose-400";
                         const profitColor = pos.profit >= 0 ? "text-emerald-400" : "text-rose-400";
-                        
+
                         tr.innerHTML = `
                             <td class="py-3 px-4 font-mono text-slate-300">#${pos.ticket}</td>
                             <td class="py-3 px-4 font-bold ${typeColor}">${pos.type}</td>
@@ -229,9 +287,63 @@
             }
         }
 
-        // Poll every 1 second
+        async function loadHistory() {
+            try {
+                const response = await fetch('/api/history');
+                const data = await response.json();
+
+                // Update summary stats
+                if (data.summary) {
+                    document.getElementById('balance').innerText = `$${data.summary.balance.toFixed(2)}`;
+
+                    const profitEl = document.getElementById('total-profit');
+                    profitEl.innerText = `$${data.summary.total_profit.toFixed(2)}`;
+                    profitEl.className = data.summary.total_profit >= 0
+                        ? "text-2xl font-bold text-emerald-400"
+                        : "text-2xl font-bold text-rose-400";
+
+                    document.getElementById('win-rate').innerText = `${data.summary.win_rate}%`;
+                    document.getElementById('total-trades').innerText = data.summary.total_trades;
+                }
+
+                // Update history table
+                const tbody = document.getElementById('history-body');
+                tbody.innerHTML = '';
+
+                if (data.trades && data.trades.length > 0) {
+                    // Reverse to show most recent first
+                    data.trades.reverse().forEach(trade => {
+                        const tr = document.createElement('tr');
+                        tr.className = "border-b border-slate-700 hover:bg-slate-800 transition-colors";
+                        const typeColor = trade.type === "BUY" ? "text-emerald-400" : "text-rose-400";
+                        const profitColor = trade.profit >= 0 ? "text-emerald-400" : "text-rose-400";
+
+                        tr.innerHTML = `
+                            <td class="py-2 px-4 text-slate-400 text-xs">${trade.time}</td>
+                            <td class="py-2 px-4 font-bold ${typeColor}">${trade.type}</td>
+                            <td class="py-2 px-4 text-slate-300">${trade.volume}</td>
+                            <td class="py-2 px-4 text-slate-300">${trade.price.toFixed(2)}</td>
+                            <td class="py-2 px-4 text-right font-bold ${profitColor}">$${trade.profit.toFixed(2)}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                } else {
+                    tbody.innerHTML = `<tr><td colspan="5" class="py-4 text-center text-slate-500">No trades found</td></tr>`;
+                }
+
+            } catch (e) {
+                console.error("History fetch error:", e);
+            }
+        }
+
+        // Poll dashboard state every 1 second
         setInterval(updateDashboard, 1000);
         updateDashboard();
+
+        // Load history on page load and every 30 seconds
+        loadHistory();
+        setInterval(loadHistory, 30000);
     </script>
 </body>
+
 </html>
