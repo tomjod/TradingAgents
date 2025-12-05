@@ -9,8 +9,8 @@ eval_results/
 eval_data/
 *.egg-info/
 .env
-state.json
+
+# Bot state files (auto-generated, don't track)
 state.json
 risk_state.json
-state.json
-state.json
+bias.json
