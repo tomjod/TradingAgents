@@ -800,7 +800,7 @@ def execute_trade(action, lot_multiplier=1.0):
         "type": mt5.ORDER_TYPE_BUY if action == "BUY" else mt5.ORDER_TYPE_SELL,
         "price": price,
         "sl": sl,
-        "deviation": 20,
+        "deviation": 10,  # Reducido de 20 -> mejor precisión de entrada
         "magic": 999000, # Soldier Magic Number
         "comment": "Soldier Scalp",
         "type_time": mt5.ORDER_TIME_GTC,
@@ -1090,18 +1090,22 @@ async def signal_finder(state):
             if bias == "BULLISH_SCALPING":
                 score = 0
                 reasons = []
-                if prob < 0.35:
+                # Descarte más estricto: probabilidad muy baja = no comprar
+                if prob < 0.40:
                     score = -99
                 else:
                     if current_price <= lower_band * 1.005:
                         score += 2
                         reasons.append("DIP")
-                    if rsi < 45:
+                    if rsi < 40:  # RSI más estricto (era 45)
                         score += 1
                         reasons.append(f"RSI:{rsi:.0f}")
-                    if prob > 0.48:
+                    if prob > 0.55:  # Umbral más alto (era 0.48)
                         score += 1
                         reasons.append(f"PROB:{prob:.2f}")
+                    if prob > 0.62:  # Bonus por probabilidad fuerte
+                        score += 1
+                        reasons.append("STRONG_PROB")
                     if current_price > ema:
                         score += 1
                         reasons.append("TREND")
@@ -1113,22 +1117,23 @@ async def signal_finder(state):
             elif bias == "BEARISH_SCALPING":
                 score = 0
                 reasons = []
-                if prob > 0.65:
+                # Descarte más estricto: probabilidad muy alta = no vender
+                if prob > 0.60:
                     score = -99
                 else:
                     if current_price >= upper_band * 0.995:
                         score += 2
                         reasons.append("PEAK")
-                    if rsi > 55:
+                    if rsi > 60:  # RSI más estricto (era 55)
                         score += 1
                         reasons.append(f"RSI:{rsi:.0f}")
-                    if prob < 0.52:
+                    if prob < 0.45:  # Umbral más estricto (era 0.52)
                         score += 1
                         reasons.append(f"PROB:{prob:.2f}")
                     if current_price < ema:
                         score += 1
                         reasons.append("TREND")
-                    if prob < 0.45:
+                    if prob < 0.38:  # Bonus por probabilidad muy baja (era 0.45)
                         score += 1
                         reasons.append("STRONG_PROB")
                 

@@ -15,7 +15,7 @@ volume: 0.01
 risk_percent: 0.01 # 0.5% risk per trade (smaller lots: 0.01-0.05)
 sl_points: 2000 # Wide SL (like reference bot - lets positions breathe)
 tp_points: 500 # Not used (exit on signal change)
-max_spread: 180
+max_spread: 120 # Reducido de 180 -> evita mercados ilíquidos
 cut_loss_points: 5000 # Cut loss if position goes -10000 points (change as needed)
 
 # Trailing Stop (ensure minimum profit)
@@ -29,11 +29,11 @@ interval_seconds: 180 # General Agent loop interval
 trade_cooldown: 300 # Seconds to wait after opening a trade before opening another
 
 # Trading Hours (UTC-3, Argentina time)
-# Gold/XAU typically trades 24h but has gaps on weekends
+# Gold/XAU - mejores horas: London Open (8-10) y NY Overlap (13-16)
 trading_hours:
   enabled: true
-  start_hour: 8 # Start trading at 00:00
-  end_hour: 13 # Stop trading at 23:00
+  start_hour: 8 # London Open
+  end_hour: 18 # Extendido hasta cierre NY (era 13)
   trade_weekends: false # Don't trade on Saturday/Sunday
 
 # Kill Switch Risk Management
@@ -45,3 +45,13 @@ kill_switch:
   volatility_spread: 50 # Max spread to trade (points)
   lot_reduction: 0.5 # Reduce lot by 50% when in drawdown
   state_file: "risk_state.json"
+
+# Tactical Agent (Fast BIAS - works WITH general.py in hybrid mode)
+tactical_agent:
+  enabled: true
+  interval_seconds: 30 # Update BIAS every 30 seconds (vs 180 for general.py)
+  strong_signal_threshold: 5 # Score threshold for BULLISH/BEARISH (vs NEUTRAL)
+  use_mtf: true # Use Multi-Timeframe Analysis (M5, M15, H1)
+  respect_ai_bias: true # HYBRID MODE: only update when aligned with AI agents
+  ai_bias_stale_minutes: 10 # Override AI bias if older than this
+
