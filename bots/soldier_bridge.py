@@ -164,6 +164,7 @@ class BridgeSoldier:
         self.last_trade_time = 0
         self.last_analysis_time = 0
         self.positions = []
+        self.pending_modifications = set() # Avoid spamming requests
         
         # Setup callbacks
         self.bridge.on_tick_callback = self.on_tick
@@ -211,32 +212,192 @@ class BridgeSoldier:
         print("❌ EA Disconnected")
     
     def on_tick(self, tick):
-        # Update candles
-        self.candle_manager.on_tick(tick)
+        """Callback from Bridge Thread - pushes to Async Queue"""
+        if hasattr(self, 'loop') and self.loop and not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self.tick_queue.put_nowait, tick)
+            
+    def manage_positions(self, tick):
+        """Manage open positions: Trailing Stop & Take Profit"""
+        if not self.positions: return
         
-        # Check for history / responses
         try:
-            while not self.bridge.response_queue.empty():
-                resp = self.bridge.response_queue.get_nowait()
-                if resp.get('type') == 'history_data':
-                    self.candle_manager.load_history(resp.get('data'))
-                elif resp.get('type') == 'positions':
-                    # Update positions if needed
-                    pass
-        except:
-            pass
-        
-        # Analyze periodically
-        if time.time() - self.last_analysis_time > 1.0:
-            self.last_analysis_time = time.time()
-            self.process_signal(tick)
-    
+            bid = tick.get('bid')
+            ask = tick.get('ask')
+            
+            # Point value (Dynamic or Config)
+            point = 0.01 if "JPY" in SYMBOL or "XAU" in SYMBOL else 0.00001
+            
+            # Trailing Config from Global Config
+            TS_START = config.get("trailing_stop_start", 350)
+            TS_STEP = config.get("trailing_step", 100)
+            TP_DIST = config.get("trailing_tp_distance", 500)
+            CUT_LOSS = config.get("cut_loss_points", 5000)
+            
+            bias = self.load_bias() # For Smart Exit
+            
+            for p in self.positions:
+                ticket = p['ticket']
+                
+                # Skip if pending action
+                if ticket in self.pending_modifications:
+                    continue
+                    
+                pos_type = p['type'] # "BUY" or "SELL"
+                open_price = p['price']
+                sl = p['sl']
+                tp = p['tp']
+                
+                should_close = False
+                close_reason = ""
+                
+                # BUY Logic
+                if pos_type == 'BUY':
+                    current_profit = (bid - open_price) / point
+                    
+                    # 0. Safety Enforcement (SL/TP Check)
+                    # If SL is 0 or too far (old config), enforce new SL
+                    target_sl = bid - SL_POINTS * point # Use BID for SL/TP base? No, usually Open Price for static SL, but let's use current config relative to OPEN
+                    # Actually standard is Open Price - SL. But if price moved, maybe we want it relative to Ask/Bid? 
+                    # Standard: Fixed SL relative to Open Price.
+                    calc_sl = open_price - SL_POINTS * point
+                    
+                    # If no SL or SL is significantly larger than configured (e.g. > 10% diff), tighten it.
+                    # But don't widen it if it's already tighter (trailing).
+                    if sl == 0 or (open_price - sl) > (SL_POINTS * point * 1.05):
+                         # Only modify if we are not already in profit trailing zone (which handles its own SL)
+                         # Simple check: enforce max risk
+                         new_sl_enforced = calc_sl
+                         if sl == 0 or new_sl_enforced > sl: # Closer to price
+                             print(f"🛡️ Enforcing Safety SL #{ticket} to {new_sl_enforced:.2f}")
+                             self.bridge.modify_position(ticket, new_sl_enforced, tp)
+                             self.pending_modifications.add(ticket)
+                             sl = new_sl_enforced
+                    
+                    # 1. Trailing SL
+                    new_sl = bid - TS_START * point
+                    if current_profit > TS_START:
+                        if new_sl > sl + TS_STEP * point:
+                             print(f"📈 Trailing SL #{ticket} to {new_sl:.2f}")
+                             self.bridge.modify_position(ticket, new_sl, tp)
+                             self.pending_modifications.add(ticket)
+                             sl = new_sl # Optimistic update for next logic in same loop
+                    
+                    # 2. Trailing TP
+                    if current_profit > 50:
+                        new_tp = bid + TP_DIST * point
+                        if tp == 0 or new_tp > tp + 50 * point:
+                            print(f"🎯 Trailing TP #{ticket} to {new_tp:.2f}")
+                            self.bridge.modify_position(ticket, sl, new_tp)
+                            self.pending_modifications.add(ticket)
+
+                    # 3. Smart Exit (Reversal or Cut Loss)
+                    if bias == "BEARISH_SCALPING" and current_profit > 50:
+                        should_close = True
+                        close_reason = f"Reversal (Bearish) +{current_profit:.0f}pts"
+                    elif current_profit < -CUT_LOSS:
+                        should_close = True
+                        close_reason = f"Cut Loss {current_profit:.0f}pts"
+
+                # SELL Logic        
+                elif pos_type == 'SELL':
+                    current_profit = (open_price - ask) / point
+                    
+                    # 0. Safety Enforcement
+                    calc_sl = open_price + SL_POINTS * point
+                    if sl == 0 or (sl - open_price) > (SL_POINTS * point * 1.05):
+                         new_sl_enforced = calc_sl
+                         if sl == 0 or new_sl_enforced < sl: # Closer to price (lower for Sell)
+                             print(f"🛡️ Enforcing Safety SL #{ticket} to {new_sl_enforced:.2f}")
+                             self.bridge.modify_position(ticket, new_sl_enforced, tp)
+                             self.pending_modifications.add(ticket)
+                             sl = new_sl_enforced
+                    
+                    # 1. Trailing SL
+                    new_sl = ask + TS_START * point
+                    if current_profit > TS_START:
+                        if sl == 0 or new_sl < sl - TS_STEP * point:
+                             print(f"📉 Trailing SL #{ticket} to {new_sl:.2f}")
+                             self.bridge.modify_position(ticket, new_sl, tp)
+                             self.pending_modifications.add(ticket)
+                             sl = new_sl
+                             
+                    # 2. Trailing TP
+                    if current_profit > 50:
+                        new_tp = ask - TP_DIST * point
+                        if tp == 0 or new_tp < tp - 50 * point:
+                            print(f"🎯 Trailing TP #{ticket} to {new_tp:.2f}")
+                            self.bridge.modify_position(ticket, sl, new_tp)
+                            self.pending_modifications.add(ticket)
+
+                    # 3. Smart Exit
+                    if bias == "BULLISH_SCALPING" and current_profit > 50:
+                        should_close = True
+                        close_reason = f"Reversal (Bullish) +{current_profit:.0f}pts"
+                    elif current_profit < -CUT_LOSS:
+                        should_close = True
+                        close_reason = f"Cut Loss {current_profit:.0f}pts"
+                
+                # Execute Close
+                if should_close and ticket not in self.pending_modifications:
+                    print(f"💰 Closing #{ticket}: {close_reason}")
+                    self.bridge.close_position(ticket)
+                    self.pending_modifications.add(ticket)
+                    
+        except Exception as e:
+            print(f"Manage positions error: {e}")
     def on_execution(self, result):
-        if result.get('status') == 'filled':
+        """Callback from Bridge Thread - Schedule update on Async Loop"""
+        if self.loop and not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self._handle_execution_async, result)
+            
+    def _handle_execution_async(self, result):
+        """Handle execution in Async Loop"""
+        status = result.get('status')
+        action = result.get('action')
+        ticket = result.get('ticket')
+        
+        # Clear pending flag
+        if ticket and ticket in self.pending_modifications:
+            self.pending_modifications.remove(ticket)
+        
+        if status == 'filled':
             self.last_trade_time = time.time()
-            print(f"✅ Order filled: {result.get('action')} @ {result.get('price')}")
-        else:
-            print(f"❌ Order failed: {result.get('error')}")
+            
+            if action == 'MODIFY':
+                sl = result.get('sl')
+                tp = result.get('tp')
+                print(f"✅ Modified #{ticket} | SL: {sl} | TP: {tp}")
+                
+                # Update local position instantly
+                for p in self.positions:
+                     if p['ticket'] == ticket:
+                         p['sl'] = sl
+                         p['tp'] = tp
+            
+            elif action in ['BUY', 'SELL']:
+                price = result.get('price')
+                print(f"✅ Order filled: {action} @ {price}")
+                self.bridge.get_positions()
+                
+            elif action in ['CLOSE', 'CLOSE_ALL']:
+                print(f"✅ Position Closed: {result.get('ticket', 'ALL')}")
+                self.bridge.get_positions()
+                
+        elif status == 'error':
+            ret = result.get('retcode', 'N/A')
+            desc = result.get('error', 'Unknown')
+            
+            # Handle "False Error" codes (10009=DONE, 10008=PLACED)
+            if ret in [10009, 10008]:
+                 print(f"✅ Order confirmed (RetCode: {ret})")
+                 self.bridge.get_positions()
+                 return # Treated as success
+
+            print(f"❌ Order failed: {desc} (RetCode: {ret})")
+            
+            # If No Changes (10025), just update local to match request to stop loop
+            if ret == 10025:
+                 pass # Wait for next position sync
 
     def detect_regime(self, df):
         """Detect market regime (reused from soldier.py)"""
@@ -419,7 +580,8 @@ class BridgeSoldier:
         features += ['h1_rsi', 'h1_adx', 'h1_trend', 'h1_rsi_diff', 'm5_h1_ema_ratio', 'atr_ratio_h1']
         
         last_row = df_calc.iloc[[-1]][features].fillna(0)
-        return last_row, df_calc.iloc[-1]
+        # Return dataframe with indicators for regime usage
+        return last_row, df_calc
 
     def calculate_score(self, row, prob, bias, regime_params):
         """Scoring logic"""
@@ -476,10 +638,63 @@ class BridgeSoldier:
                  
         return score, reasons
 
-    def process_signal(self, tick):
+
+
+    async def monitor_positions_task(self):
+        """High-frequency position monitoring (runs on every tick event)"""
+        print("⚡ Position Monitor Async Task Started")
+        while self.running:
+            try:
+                # Get tick from queue (pushed by callback)
+                tick = await self.tick_queue.get()
+                
+                # 1. Update Candles (Fast)
+                self.candle_manager.on_tick(tick)
+                
+                # 2. Manage Positions (Fast - Trailing Stop, etc)
+                self.manage_positions(tick)
+                
+                # 3. Check Responses (positions, history)
+                # We can check the bridge response queue here too non-blocking
+                try:
+                    while not self.bridge.response_queue.empty():
+                        resp = self.bridge.response_queue.get_nowait()
+                        if resp.get('type') == 'history_data':
+                            self.candle_manager.load_history(resp.get('data'))
+                            self.history_loaded.set()
+                        elif resp.get('type') == 'positions':
+                            self.positions = resp.get('data', [])
+                except Exception as e:
+                    print(f"Resp queue error: {e}")
+                
+                # 4. Trigger Strategy Analysis (Throttled)
+                now = time.time()
+                if now - self.last_analysis_time >= 0.5: # 500ms throttle for ML
+                     # Snapshot data for strategy
+                     df_copy = self.candle_manager.get_dataframe()
+                     asyncio.create_task(self.run_strategy(tick, df_copy))
+                     self.last_analysis_time = now
+                     
+                self.tick_queue.task_done()
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"Monitor error: {e}")
+                await asyncio.sleep(0.1)
+
+    async def run_strategy(self, tick, df):
+        """Run ML Strategy (Offloaded to avoid blocking critical path)"""
         try:
-            # Stats
-            df = self.candle_manager.get_dataframe()
+            # We run this in current loop but could use executor if calc is very heavy
+            # For now direct call is fine as long as we yield
+            await self.process_signal_async(tick, df)
+        except Exception as e:
+            print(f"Strategy error: {e}")
+
+    async def process_signal_async(self, tick, df):
+        """Async version of process_signal"""
+        try:
             if len(df) < 30:
                 print(f"\r⏳ Warming up... {len(df)}/30 candles", end="")
                 return
@@ -488,7 +703,7 @@ class BridgeSoldier:
             spread = tick.get('spread', 999)
             bid = tick.get('bid', 0)
             
-            # Log status immediately (throttled by on_tick timer)
+            # Log status immediately (throttled by caller)
             print(f"\r📊 {bias} | P: {bid:.2f} | Spread: {spread:.0f} | ", end="")
 
             # Check cooldown
@@ -501,19 +716,20 @@ class BridgeSoldier:
                 print(f"Spread > {MAX_SPREAD}", end="")
                 return
             
-            # Calc features
-            X, row = self.calculate_features(df)
+            # Calc features (Sync CPU bound - runs in task)
+            X, df_enriched = self.calculate_features(df)
             
             # Prediction
             prob = self.model.predict(X)[0]
             
             # Regime
-            regime, params = self.detect_regime(df)
+            regime, params = self.detect_regime(df_enriched)
             
             # Score
-            score, reasons = self.calculate_score(row, prob, bias, params)
+            last_row_series = df_enriched.iloc[-1]
+            score, reasons = self.calculate_score(last_row_series, prob, bias, params)
             
-            # Update log with analysis
+            # Update log
             print(f"Prob: {prob:.2f} | Score: {score} | Regime: {regime}", end="")
             
             if bias == "NEUTRAL":
@@ -531,36 +747,38 @@ class BridgeSoldier:
                     self.last_trade_time = time.time()
 
         except Exception as e:
-            print(f"Error in process_signal: {e}")
+            print(f"Error in process_signal_async: {e}")
 
-    def start(self):
-        print("="*60)
-        print("🤖 Bridge Soldier Starting (V4 Full Features)")
-        print("="*60)
-        
-        if not self.load_model(): return False
-        
-        self.bridge.start()
-        self.running = True
-        
-        print("\n⏳ Waiting for MQL5 EA to connect...")
-        return True
-    
     def stop(self):
         self.running = False
         self.bridge.stop()
+        if hasattr(self, 'loop') and self.loop.is_running():
+            self.loop.stop()
         print("🛑 Bridge Soldier stopped")
-    
-    def run(self):
-        if not self.start(): return
-        try:
-            while self.running:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self.stop()
 
+    def start_async(self):
+         self.loop = asyncio.new_event_loop()
+         asyncio.set_event_loop(self.loop)
+         self.tick_queue = asyncio.Queue()
+         self.history_loaded = asyncio.Event()
+         
+         if not self.load_model(): return
+
+         self.bridge.start()
+         self.running = True
+         
+         # Connect & Request
+         print("\n⏳ Waiting for MQL5 EA...")
+         # Bridge connection happens in background thread
+         
+         try:
+             self.loop.create_task(self.monitor_positions_task())
+             self.loop.run_forever()
+         except KeyboardInterrupt:
+             pass
+         finally:
+             self.stop()
+             
 if __name__ == "__main__":
     soldier = BridgeSoldier()
-    soldier.run()
+    soldier.start_async()

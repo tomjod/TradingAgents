@@ -266,6 +266,16 @@ class TradingBridge:
         }
         self.command_queue.put(command)
     
+    def modify_position(self, ticket, sl, tp):
+        """Modify position SL/TP"""
+        command = {
+            "action": "MODIFY",
+            "ticket": ticket,
+            "sl": float(sl),
+            "tp": float(tp)
+        }
+        self.command_queue.put(command)
+    
     def close_all(self):
         """Close all positions"""
         command = {"action": "CLOSE_ALL"}

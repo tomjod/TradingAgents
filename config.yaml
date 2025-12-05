@@ -13,15 +13,15 @@ bias_file: "bias.json"
 # Trading Parameters
 volume: 0.01
 risk_percent: 0.01 # 0.5% risk per trade (smaller lots: 0.01-0.05)
-sl_points: 800 # Optimizado: era 2000, reduce para mejor ratio R:R
+sl_points: 500 # Scalping: 500 points ($5.00)
 tp_points: 500 # Not used (exit on signal change)
-max_spread: 120 # Reducido de 180 -> evita mercados ilíquidos
-cut_loss_points: 1500 # Reducido: era 5000, corta pérdidas antes
+max_spread: 5000 # DEMO MODE: Alto para permitir testing sin restricción de spread (era 120)
+cut_loss_points: 1000 # Cut loss at $10.00
 
 # Trailing Stop (ensure minimum profit)
-trailing_stop_start: 350 # Start trailing after 100 points profit (~$0.10)
-trailing_step: 100 # Move SL every 50 points
-trailing_tp_distance: 500 # Keep TP this many points ahead of price
+trailing_stop_start: 150 # Start trailing after 150 points profit ($1.50)
+trailing_step: 50 # Move SL every 50 points ($0.50)
+trailing_tp_distance: 200 # Keep TP 200 points ahead ($2.00)
 
 # Strategy
 max_positions: 4 # Like reference bot (can hold 6 positions simultaneously)

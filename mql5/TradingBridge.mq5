@@ -87,9 +87,32 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| Timer function - sends tick data                                   |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Timer function - sends tick data                                   |
+//+------------------------------------------------------------------+
 void OnTimer()
 {
-    if(!g_connected) return;
+    // Reconnection logic
+    if(!g_connected)
+    {
+        static datetime last_attempt = 0;
+        if(TimeCurrent() - last_attempt < 5) return; // Retry every 5s
+        
+        last_attempt = TimeCurrent();
+        Print("🔄 Attempting to reconnect...");
+        
+        // Reset socket
+        if(g_socket != INVALID_HANDLE) SocketClose(g_socket);
+        g_socket = SocketCreate();
+        
+        if(SocketConnect(g_socket, InpHost, InpPort, 1000))
+        {
+             g_connected = true;
+             Print("✅ Reconnected to Python Brain");
+             SendMessage("{\"type\":\"handshake\",\"ea\":\"TradingBridge\",\"symbol\":\"" + InpSymbol + "\"}");
+        }
+        return;
+    }
     
     // Get current tick
     MqlTick tick;
@@ -230,6 +253,10 @@ void ProcessCommand(string json)
         if(count <= 0) count = 200; // Default
         SendHistory(count);
     }
+    else if(action == "MODIFY")
+    {
+        ExecuteModify(json);
+    }
     else if(action == "PING")
     {
         SendMessage("{\"type\":\"pong\",\"time\":\"" + TimeToString(TimeCurrent()) + "\"}");
@@ -237,6 +264,35 @@ void ProcessCommand(string json)
     else
     {
         Print("Unknown action: ", action);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Modify Position (SL/TP)                                            |
+//+------------------------------------------------------------------+
+void ExecuteModify(string json)
+{
+    ulong ticket = (ulong)StringToInteger(GetJsonValue(json, "ticket"));
+    double sl = StringToDouble(GetJsonValue(json, "sl"));
+    double tp = StringToDouble(GetJsonValue(json, "tp"));
+    
+    if(g_trade.PositionModify(ticket, sl, tp))
+    {
+         string response = StringFormat(
+             "{\"type\":\"execution\",\"action\":\"MODIFY\",\"status\":\"filled\",\"ticket\":%d,\"sl\":%.5f,\"tp\":%.5f}",
+             ticket, sl, tp
+         );
+         SendMessage(response);
+         Print("✅ Modified #", ticket, " SL:", sl, " TP:", tp);
+    }
+    else
+    {
+        string response = StringFormat(
+             "{\"type\":\"execution\",\"action\":\"MODIFY\",\"status\":\"error\",\"error\":\"%s\",\"retcode\":%d}",
+             g_trade.ResultComment(), g_trade.ResultRetcode()
+         );
+         SendMessage(response);
+         Print("Modify failed: ", g_trade.ResultComment());
     }
 }
 
