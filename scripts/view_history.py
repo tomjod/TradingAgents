@@ -40,7 +40,7 @@ def get_trade_history():
         return
     
     # Filter only our bot's trades (magic = 999000)
-    bot_deals = [d for d in deals if d.magic == 999000 and d.entry == 1]  # entry=1 means OUT (closed)
+    bot_deals = [d for d in deals if d.magic == 999001 and d.entry == 1]  # entry=1 means OUT (closed)
     
     print(f"\n📊 SOLDIER BOT TRADE HISTORY (Last 24h)")
     print(f"{'='*80}")

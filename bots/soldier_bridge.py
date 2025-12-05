@@ -553,14 +553,76 @@ class BridgeSoldier:
         df_calc['daily_low'] = df_calc['low'].rolling(288).min()
         df_calc['intraday_position'] = (df_calc['close'] - df_calc['daily_low']) / (df_calc['daily_high'] - df_calc['daily_low'] + 0.001)
 
-        # 9. H1 Features (Placeholder/Approximation)
-        # Ideally fetch H1 data, here we approximate or zerofill
-        df_calc['h1_rsi'] = 50
-        df_calc['h1_adx'] = 25
-        df_calc['h1_trend'] = 0
-        df_calc['h1_rsi_diff'] = 0
-        df_calc['m5_h1_ema_ratio'] = 1.0
-        df_calc['atr_ratio_h1'] = 1.0
+        # 9. H1 Features (Real Calculation)
+        # Resample M5 to H1
+        try:
+            # Ensure time index
+            df_h1_src = stock.copy()
+            if 'time' in df_h1_src.columns:
+                df_h1_src.set_index('time', inplace=True)
+            
+            # Resample calculation
+            df_h1 = df_h1_src.resample('1h').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna()
+            
+            if len(df_h1) > 14:
+                 h1_stock = wrap(df_h1)
+                 _ = h1_stock['rsi_14']
+                 _ = h1_stock['adx']
+                 _ = h1_stock['close_50_sma']
+                 _ = h1_stock['close_200_sma']
+                 _ = h1_stock['close_8_ema']
+                 _ = h1_stock['close_21_ema']
+                 _ = h1_stock['atr']
+                 
+                 # Get latest H1 values (broadcast to M5 length)
+                 # We take the last closed H1 candle or current? 
+                 # Current H1 is forming, so it might be repainting. Use last closed (-2) or current (-1)?
+                 # Using -1 (current forming) is faster but repaints. -2 is safer. 
+                 # Let's use -1 to match M5 "current state"
+                 
+                 last_h1 = h1_stock.iloc[-1]
+                 
+                 df_calc['h1_rsi'] = last_h1['rsi_14']
+                 df_calc['h1_adx'] = last_h1['adx']
+                 
+                 # H1 Trend: 1 if EMA8 > EMA21, -1 else
+                 trend_val = 1 if last_h1['close_8_ema'] > last_h1['close_21_ema'] else -1
+                 df_calc['h1_trend'] = trend_val
+                 
+                 # RSI diff (H1 - M5)
+                 df_calc['h1_rsi_diff'] = last_h1['rsi_14'] - df_calc['rsi_14']
+                 
+                 # Ratio M5 EMA / H1 EMA
+                 df_calc['m5_h1_ema_ratio'] = df_calc['close_5_ema'] / last_h1['close_8_ema'] if last_h1['close_8_ema'] else 1.0
+                 
+                 # ATR Ratio
+                 atr_m5 = df_calc['atr']
+                 atr_h1 = last_h1['atr']
+                 df_calc['atr_ratio_h1'] = atr_m5 / atr_h1 if atr_h1 > 0 else 1.0
+                 
+            else:
+                 # Fallback if not enough history
+                 df_calc['h1_rsi'] = 50
+                 df_calc['h1_adx'] = 25
+                 df_calc['h1_trend'] = 0
+                 df_calc['h1_rsi_diff'] = 0
+                 df_calc['m5_h1_ema_ratio'] = 1.0
+                 df_calc['atr_ratio_h1'] = 0.2
+                 
+        except Exception as e:
+            print(f"H1 Calc Error: {e}")
+            df_calc['h1_rsi'] = 50
+            df_calc['h1_adx'] = 25
+            df_calc['h1_trend'] = 0
+            df_calc['h1_rsi_diff'] = 0
+            df_calc['m5_h1_ema_ratio'] = 1.0
+            df_calc['atr_ratio_h1'] = 0.2
 
         # Features List (48 features)
         features = [
