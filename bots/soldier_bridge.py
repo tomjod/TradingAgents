@@ -12,6 +12,7 @@ import sys
 import yaml
 import numpy as np
 import pandas as pd
+import MetaTrader5 as mt5
 import lightgbm as lgb
 from stockstats import wrap
 from datetime import datetime, timedelta
@@ -157,8 +158,14 @@ class BridgeSoldier:
     def __init__(self):
         self.bridge = TradingBridge()
         self.model = None
-        self.guardian = None
         self.candle_manager = CandleManager(timeframe_minutes=5)
+        
+        # Initialize MT5 for RiskGuardian (Read-Only usage)
+        if not mt5.initialize():
+             print("⚠️ MT5 Init failed, RiskGuardian might not work")
+        
+        # Initialize Risk Guardian
+        self.guardian = RiskGuardian(config)
         
         self.running = False
         self.last_trade_time = 0
@@ -581,12 +588,9 @@ class BridgeSoldier:
                  _ = h1_stock['atr']
                  
                  # Get latest H1 values (broadcast to M5 length)
-                 # We take the last closed H1 candle or current? 
-                 # Current H1 is forming, so it might be repainting. Use last closed (-2) or current (-1)?
-                 # Using -1 (current forming) is faster but repaints. -2 is safer. 
-                 # Let's use -1 to match M5 "current state"
-                 
-                 last_h1 = h1_stock.iloc[-1]
+                 # We take the last closed H1 candle (-2) to avoid repainting/noise.
+                 # Using -1 (current forming) repaints. -2 is stable.
+                 last_h1 = h1_stock.iloc[-2]
                  
                  df_calc['h1_rsi'] = last_h1['rsi_14']
                  df_calc['h1_adx'] = last_h1['adx']
@@ -701,23 +705,103 @@ class BridgeSoldier:
         return score, reasons
 
 
+    def is_market_open(self):
+        """
+        Check if market is open based on XAUUSDm schedule (Image provided).
+        Schedule (Server Time):
+        - Mon-Thu: 00:00-21:58, 23:00-24:00 (Break 21:58-23:00)
+        - Fri: 00:00-21:58
+        - Sat: Closed
+        - Sun: 23:00-24:00
+        
+        Assumed Server Time = Local Time + 3 Hours (based on 19:13 Local being closed)
+        """
+        try:
+            # Current Local Time
+            now_local = datetime.now()
+            
+            # Estimated Server Time
+            now_server = now_local + timedelta(hours=3)
+            
+            weekday = now_server.weekday() # 0=Mon, 6=Sun
+            hour = now_server.hour
+            minute = now_server.minute
+            
+            # Total minutes from start of day
+            total_mins = hour * 60 + minute
+            
+            # Break Start: 21:58 -> 1318 mins
+            # Break End: 23:00 -> 1380 mins
+            BREAK_START = 21 * 60 + 58
+            BREAK_END = 23 * 60
+            
+            if weekday >= 0 and weekday <= 3: # Mon-Thu
+                if total_mins >= BREAK_START and total_mins < BREAK_END:
+                    return False, f"Daily Break ({now_server.strftime('%H:%M')} Server)"
+                return True, "Open"
+                
+            elif weekday == 4: # Fri
+                if total_mins >= BREAK_START:
+                    return False, "Weekend Close"
+                return True, "Open"
+                
+            elif weekday == 5: # Sat
+                return False, "Weekend Close"
+                
+            elif weekday == 6: # Sun
+                if total_mins < BREAK_END:
+                    return False, "Weekend Close"
+                return True, "Open"
+                
+            return True, "Open"
+            
+        except Exception as e:
+            print(f"Time check error: {e}")
+            return True, "Error" # Default to open on error
+
 
     async def monitor_positions_task(self):
         """High-frequency position monitoring (runs on every tick event)"""
         print("⚡ Position Monitor Async Task Started")
+        
+        # Watchdog
+        self.last_tick_recv = time.time()
+        MAX_FRAME_SIZE = 500
+        
         while self.running:
             try:
-                # Get tick from queue (pushed by callback)
-                tick = await self.tick_queue.get()
+                # 0. Watchdog Check (Timeout 10s loop)
+                try:
+                    tick = await asyncio.wait_for(self.tick_queue.get(), timeout=10.0)
+                    self.last_tick_recv = time.time()
+                except asyncio.TimeoutError:
+                    elapsed = time.time() - self.last_tick_recv
+                    if elapsed > 60:
+                        # Check if Market is Closed before restarting
+                        is_open, reason = self.is_market_open()
+                        if not is_open:
+                             print(f"\r💤 Market Closed ({reason}). Sleeping... ({int(elapsed)}s)", end="")
+                             # Reset watchdog to prevent restart loop immediately when it opens
+                             # self.last_tick_recv = time.time() # Optional: Don't reset, just don't restart
+                             await asyncio.sleep(10)
+                             continue
+                        
+                        print(f"\n🚨 WATCHDOG ALERT: No ticks for {int(elapsed)}s! Restarting...")
+                        os.execv(sys.executable, ['python'] + sys.argv)
+                    # print(f"\r⏳ Waiting... ({int(elapsed)}s)", end="")
+                    continue
                 
                 # 1. Update Candles (Fast)
                 self.candle_manager.on_tick(tick)
+                
+                # Limit DataFrame size protection
+                if len(self.candle_manager.candles) > MAX_FRAME_SIZE:
+                     self.candle_manager.candles = self.candle_manager.candles[-MAX_FRAME_SIZE:]
                 
                 # 2. Manage Positions (Fast - Trailing Stop, etc)
                 self.manage_positions(tick)
                 
                 # 3. Check Responses (positions, history)
-                # We can check the bridge response queue here too non-blocking
                 try:
                     while not self.bridge.response_queue.empty():
                         resp = self.bridge.response_queue.get_nowait()
@@ -765,17 +849,28 @@ class BridgeSoldier:
             spread = tick.get('spread', 999)
             bid = tick.get('bid', 0)
             
-            # Log status immediately (throttled by caller)
-            print(f"\r📊 {bias} | P: {bid:.2f} | Spread: {spread:.0f} | ", end="")
+            # Stats
+            status = self.guardian.get_status()
+            pnl = status.get('daily_pnl_percent', 0) * 100
+            dd = status.get('drawdown_percent', 0) * 100
+            
+            # Log status immediately
+            print(f"\r📊 {bias} | P: {bid:.2f} | PnL: {pnl:+.1f}% | DD: {dd:.1f}% | ", end="")
 
             # Check cooldown
             if time.time() - self.last_trade_time < TRADE_COOLDOWN:
                 print(f"Cooldown ({int(TRADE_COOLDOWN - (time.time() - self.last_trade_time))}s)", end="")
                 return
             
-            # Check spread
-            if spread > MAX_SPREAD:
-                print(f"Spread > {MAX_SPREAD}", end="")
+            # Risk Guardian Checks
+            can_trade, reason = self.guardian.can_trade()
+            if not can_trade:
+                print(f"\r🛡️ Risk Guardian: {reason}", end="")
+                return
+                
+            check_spread, reason = self.guardian.check_volatility(spread)
+            if not check_spread:
+                print(f"\r🛡️ High Spread: {spread} > {self.guardian.volatility_spread}", end="")
                 return
             
             # Calc features (Sync CPU bound - runs in task)
