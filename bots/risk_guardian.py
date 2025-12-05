@@ -14,10 +14,11 @@ class RiskGuardian:
     """
     Kill Switch Risk Management System
     
-    3 Protection Levels:
+    4 Protection Levels:
     1. Daily Loss Limit - Stop trading if loss > X% today
-    2. Drawdown Monitor - Reduce lot size if balance drops X% from peak
-    3. Volatility Guard - Pause if spread is too high
+    2. Daily Profit Target - Stop trading if profit > X% today (lock in gains!)
+    3. Drawdown Monitor - Reduce lot size if balance drops X% from peak
+    4. Volatility Guard - Pause if spread is too high
     """
     
     def __init__(self, config: dict, state_file: str = "risk_state.json"):
@@ -28,6 +29,7 @@ class RiskGuardian:
         self.enabled = kill_switch_config.get("enabled", True)
         
         self.daily_loss_limit = kill_switch_config.get("daily_loss_limit", 0.02)  # 2%
+        self.daily_profit_target = kill_switch_config.get("daily_profit_target", 0.0)  # 0 = disabled
         self.max_drawdown = kill_switch_config.get("max_drawdown", 0.05)  # 5%
         self.volatility_spread = kill_switch_config.get("volatility_spread", 50)  # points
         self.lot_reduction = kill_switch_config.get("lot_reduction", 0.5)  # 50%
@@ -47,6 +49,8 @@ class RiskGuardian:
         print(f"🛡️ Risk Guardian initialized")
         if self.enabled:
             print(f"   Daily Loss Limit: {self.daily_loss_limit*100:.1f}%")
+            if self.daily_profit_target > 0:
+                print(f"   Daily Profit Target: {self.daily_profit_target*100:.1f}% 🎯")
             print(f"   Max Drawdown: {self.max_drawdown*100:.1f}%")
             print(f"   Volatility Spread: {self.volatility_spread} points")
         else:
@@ -59,6 +63,7 @@ class RiskGuardian:
             "daily_start_balance": 0.0,
             "last_reset_date": str(date.today()),
             "kill_switch_active": False,
+            "kill_switch_reason": "",  # "loss" or "profit_target"
             "lot_reduction_active": False
         }
         
@@ -158,8 +163,16 @@ class RiskGuardian:
         # Check Daily Loss Limit
         if daily_pnl < -self.daily_loss_limit:
             self.state["kill_switch_active"] = True
+            self.state["kill_switch_reason"] = "loss"
             self._save_state()
-            return False, f"Daily loss limit hit ({daily_pnl*100:.2f}%)"
+            return False, f"🛑 Daily loss limit hit ({daily_pnl*100:.2f}%)"
+        
+        # Check Daily Profit Target (if enabled)
+        if self.daily_profit_target > 0 and daily_pnl >= self.daily_profit_target:
+            self.state["kill_switch_active"] = True
+            self.state["kill_switch_reason"] = "profit_target"
+            self._save_state()
+            return False, f"🎯 Daily profit target reached! ({daily_pnl*100:.2f}%) - Go to sleep! 💤"
         
         return True, "OK"
     
@@ -197,9 +210,12 @@ class RiskGuardian:
         return {
             "balance": balance,
             "peak_balance": self.state["peak_balance"],
+            "daily_start_balance": self.state["daily_start_balance"],
             "daily_pnl_percent": daily_pnl * 100,
+            "daily_profit_target": self.daily_profit_target * 100,
             "drawdown_percent": drawdown * 100,
             "kill_switch_active": self.state["kill_switch_active"],
+            "kill_switch_reason": self.state.get("kill_switch_reason", ""),
             "lot_reduction_active": self.state["lot_reduction_active"],
             "lot_multiplier": self.get_lot_multiplier()
         }
