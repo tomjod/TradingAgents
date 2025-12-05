@@ -7,16 +7,16 @@ symbol: "XAUUSDm"
 timeframe: "M5"
 
 # Paths (Relative to Project Root)
-model_path: "models/lightgbm_scalper.txt"
+model_path: "models/lightgbm_scalper_v4.txt" # V4 with regime & peak_hours features
 bias_file: "bias.json"
 
 # Trading Parameters
 volume: 0.01
 risk_percent: 0.01 # 0.5% risk per trade (smaller lots: 0.01-0.05)
-sl_points: 2000 # Wide SL (like reference bot - lets positions breathe)
+sl_points: 800 # Optimizado: era 2000, reduce para mejor ratio R:R
 tp_points: 500 # Not used (exit on signal change)
 max_spread: 120 # Reducido de 180 -> evita mercados ilíquidos
-cut_loss_points: 5000 # Cut loss if position goes -10000 points (change as needed)
+cut_loss_points: 1500 # Reducido: era 5000, corta pérdidas antes
 
 # Trailing Stop (ensure minimum profit)
 trailing_stop_start: 350 # Start trailing after 100 points profit (~$0.10)
@@ -50,7 +50,7 @@ kill_switch:
 tactical_agent:
   enabled: true
   interval_seconds: 30 # Update BIAS every 30 seconds (vs 180 for general.py)
-  strong_signal_threshold: 5 # Score threshold for BULLISH/BEARISH (vs NEUTRAL)
+  strong_signal_threshold: 2.5 # Score threshold (era 5, muy alto para scores ponderados)
   use_mtf: true # Use Multi-Timeframe Analysis (M5, M15, H1)
   respect_ai_bias: true # HYBRID MODE: only update when aligned with AI agents
   ai_bias_stale_minutes: 10 # Override AI bias if older than this

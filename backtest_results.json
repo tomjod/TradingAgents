@@ -1,0 +1,15 @@
+{
+  "total_trades": 826,
+  "wins": 373,
+  "losses": 453,
+  "win_rate": 45.157384987893465,
+  "profit_factor": 1.0067422737306866,
+  "total_profit_points": 2443.4000000007763,
+  "avg_win": 978.1324396782861,
+  "avg_loss": 799.9999999999999,
+  "max_drawdown": 54906.90000000006,
+  "exit_reasons": {
+    "SL": 453,
+    "REVERSAL": 373
+  }
+}

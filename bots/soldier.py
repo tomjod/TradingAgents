@@ -373,13 +373,13 @@ def get_higher_timeframe_trend():
 def detect_market_regime():
     """
     Detect market regime: TRENDING, RANGING, or VOLATILE
-    Returns regime and recommended strategy adjustments
+    Returns regime and DYNAMIC strategy adjustments for scoring
     """
     try:
         # Get H1 data for regime detection
         h1_rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_H1, 0, 30)
         if h1_rates is None:
-            return 'UNKNOWN', {}
+            return 'UNKNOWN', get_default_regime_params()
         
         h1_df = pd.DataFrame(h1_rates)
         
@@ -398,7 +398,6 @@ def detect_market_regime():
         atr_ratio = atr_14 / atr_avg if atr_avg > 0 else 1.0
         
         # Calculate ADX (trend strength)
-        # Simplified ADX calculation
         h1_df['dm_plus'] = np.where(
             (h1_df['high'] - h1_df['high'].shift(1)) > (h1_df['low'].shift(1) - h1_df['low']),
             np.maximum(h1_df['high'] - h1_df['high'].shift(1), 0),
@@ -418,36 +417,91 @@ def detect_market_regime():
         di_minus = 100 * (smoothed_dm_minus / smoothed_tr)
         dx = 100 * abs(di_plus - di_minus) / (di_plus + di_minus + 0.001)
         adx = dx.rolling(14).mean().iloc[-1]
+        adx = round(adx, 1) if not np.isnan(adx) else 0
         
-        # Determine regime
-        regime_info = {
-            'atr_ratio': round(atr_ratio, 2),
-            'adx': round(adx, 1) if not np.isnan(adx) else 0,
-            'trailing_multiplier': 1.0,
-            'entry_threshold': 3
-        }
-        
+        # Determine regime with DYNAMIC scoring parameters
         if atr_ratio > 1.5:
-            # HIGH VOLATILITY - be cautious
+            # HIGH VOLATILITY - be very cautious, need strong signals
             regime = 'VOLATILE'
-            regime_info['trailing_multiplier'] = 1.5  # Wider trailing stop
-            regime_info['entry_threshold'] = 4  # Stricter entry
+            regime_info = {
+                'atr_ratio': round(atr_ratio, 2),
+                'adx': adx,
+                'trailing_multiplier': 1.5,  # Wider trailing stop
+                'entry_threshold': 5,  # Very strict entry (was 4)
+                # Dynamic scoring params
+                'prob_threshold_buy': 0.60,   # Need higher prob (was 0.55)
+                'prob_threshold_sell': 0.40,  # Need lower prob (was 0.45)
+                'prob_discard_buy': 0.45,     # Discard if below (was 0.40)
+                'prob_discard_sell': 0.55,    # Discard if above (was 0.60)
+                'rsi_oversold': 35,           # More extreme RSI needed
+                'rsi_overbought': 65,
+                'bb_points': 3,               # More points for BB signals
+                'trend_points': 1,
+                'prob_bonus_threshold': 0.68, # Strong prob bonus (was 0.62)
+            }
         elif adx > 25:
-            # TRENDING - ride the trend
+            # TRENDING - ride the trend, be more aggressive
             regime = 'TRENDING'
-            regime_info['trailing_multiplier'] = 0.8  # Tighter trailing to lock profits
-            regime_info['entry_threshold'] = 3
+            regime_info = {
+                'atr_ratio': round(atr_ratio, 2),
+                'adx': adx,
+                'trailing_multiplier': 0.8,  # Tighter trailing to lock profits
+                'entry_threshold': 3,  # More permissive in trends
+                # Dynamic scoring params - favor trend following
+                'prob_threshold_buy': 0.52,   # Lower threshold in trends
+                'prob_threshold_sell': 0.48,
+                'prob_discard_buy': 0.38,
+                'prob_discard_sell': 0.62,
+                'rsi_oversold': 45,           # RSI less important in trends
+                'rsi_overbought': 55,
+                'bb_points': 1,               # BB less important
+                'trend_points': 2,            # Trend alignment MORE important
+                'prob_bonus_threshold': 0.58,
+            }
         else:
-            # RANGING - mean reversion
+            # RANGING - mean reversion, BB and RSI matter more
             regime = 'RANGING'
-            regime_info['trailing_multiplier'] = 1.2
-            regime_info['entry_threshold'] = 4  # Stricter in ranges
+            regime_info = {
+                'atr_ratio': round(atr_ratio, 2),
+                'adx': adx,
+                'trailing_multiplier': 1.2,
+                'entry_threshold': 4,  # Stricter in ranges
+                # Dynamic scoring params - favor mean reversion
+                'prob_threshold_buy': 0.55,
+                'prob_threshold_sell': 0.45,
+                'prob_discard_buy': 0.40,
+                'prob_discard_sell': 0.60,
+                'rsi_oversold': 35,           # RSI very important in ranges
+                'rsi_overbought': 65,
+                'bb_points': 3,               # BB very important for reversals
+                'trend_points': 1,
+                'prob_bonus_threshold': 0.62,
+            }
         
         return regime, regime_info
         
     except Exception as e:
         print(f"Regime Detection Error: {e}")
-        return 'UNKNOWN', {}
+        return 'UNKNOWN', get_default_regime_params()
+
+
+def get_default_regime_params():
+    """Default params when regime detection fails"""
+    return {
+        'atr_ratio': 1.0,
+        'adx': 0,
+        'trailing_multiplier': 1.0,
+        'entry_threshold': 4,
+        'prob_threshold_buy': 0.55,
+        'prob_threshold_sell': 0.45,
+        'prob_discard_buy': 0.40,
+        'prob_discard_sell': 0.60,
+        'rsi_oversold': 40,
+        'rsi_overbought': 60,
+        'bb_points': 2,
+        'trend_points': 1,
+        'prob_bonus_threshold': 0.62,
+    }
 
 def calculate_features(df):
     stock = wrap(df)
@@ -525,6 +579,40 @@ def calculate_features(df):
         df_calc['london_session'] = ((df_calc['hour'] >= 8) & (df_calc['hour'] <= 16)).astype(int)
         df_calc['ny_session'] = ((df_calc['hour'] >= 13) & (df_calc['hour'] <= 21)).astype(int)
         df_calc['overlap_session'] = ((df_calc['hour'] >= 13) & (df_calc['hour'] <= 16)).astype(int)
+        
+        # V4 NEW: Peak hours (highest volatility for gold)
+        df_calc['peak_hours'] = (
+            ((df_calc['hour'] >= 8) & (df_calc['hour'] <= 10)) |  # London Open
+            ((df_calc['hour'] >= 13) & (df_calc['hour'] <= 16))   # NY Overlap
+        ).astype(int)
+        
+        # V4 NEW: Off-peak hours (avoid trading)
+        df_calc['off_peak'] = ((df_calc['hour'] >= 21) | (df_calc['hour'] <= 6)).astype(int)
+    
+    # V4 NEW: Regime Features
+    df_calc['atr_14'] = df_calc['atr'].rolling(14).mean()
+    df_calc['atr_avg'] = df_calc['atr'].rolling(50).mean()
+    df_calc['atr_regime_ratio'] = df_calc['atr_14'] / df_calc['atr_avg']
+    
+    # Classify regime: TRENDING (1) or VOLATILE (2), else RANGING (0)
+    last_idx = df_calc.index[-1]
+    atr_regime_val = df_calc.loc[last_idx, 'atr_regime_ratio']
+    adx_val = df_calc.loc[last_idx, 'adx']
+    
+    if pd.notna(atr_regime_val) and atr_regime_val > 1.5:
+        df_calc.loc[last_idx, 'regime_trending'] = 0
+        df_calc.loc[last_idx, 'regime_volatile'] = 1
+    elif pd.notna(adx_val) and adx_val > 25:
+        df_calc.loc[last_idx, 'regime_trending'] = 1
+        df_calc.loc[last_idx, 'regime_volatile'] = 0
+    else:
+        df_calc.loc[last_idx, 'regime_trending'] = 0
+        df_calc.loc[last_idx, 'regime_volatile'] = 0
+    
+    # V4 NEW: Intraday Position (where is price in today's range?)
+    df_calc['daily_high'] = df_calc['high'].rolling(288).max()  # 288 M5 candles = 24h
+    df_calc['daily_low'] = df_calc['low'].rolling(288).min()
+    df_calc['intraday_position'] = (df_calc['close'] - df_calc['daily_low']) / (df_calc['daily_high'] - df_calc['daily_low'] + 0.001)
     
     # 8. H1 Features (for v3 model with 42 features)
     try:
@@ -589,7 +677,7 @@ def calculate_features(df):
         df_calc.loc[df_calc.index[-1], 'm5_h1_ema_ratio'] = 1.0
         df_calc.loc[df_calc.index[-1], 'atr_ratio_h1'] = 1.0
     
-    # Feature list matching training (42 features for v3 model)
+    # Feature list matching training (48 features for v4 model)
     features = [
         # Basic indicators
         'rsi_14', 'rsi_6', 'rsi_slope',
@@ -609,8 +697,16 @@ def calculate_features(df):
     # Add time features if available
     if 'hour' in df_calc.columns:
         features += ['hour', 'day_of_week', 'london_session', 'ny_session', 'overlap_session']
+        # V4 NEW: peak hours features
+        features += ['peak_hours', 'off_peak']
     
-    # Add H1 features (v3 model)
+    # V4 NEW: Regime features
+    features += ['atr_regime_ratio', 'regime_trending', 'regime_volatile']
+    
+    # V4 NEW: Intraday position
+    features += ['intraday_position']
+    
+    # Add H1 features
     features += ['h1_rsi', 'h1_adx', 'h1_trend', 'h1_rsi_diff', 'm5_h1_ema_ratio', 'atr_ratio_h1']
     
     # Get last row, fill NaN with 0
@@ -1090,55 +1186,77 @@ async def signal_finder(state):
             if bias == "BULLISH_SCALPING":
                 score = 0
                 reasons = []
-                # Descarte más estricto: probabilidad muy baja = no comprar
-                if prob < 0.40:
+                reasons.append(f"[{regime}]")  # Show regime in log
+                
+                # DYNAMIC: Use regime-specific discard threshold
+                if prob < regime_info.get('prob_discard_buy', 0.40):
                     score = -99
                 else:
+                    # DYNAMIC: BB points based on regime
                     if current_price <= lower_band * 1.005:
-                        score += 2
+                        score += regime_info.get('bb_points', 2)
                         reasons.append("DIP")
-                    if rsi < 40:  # RSI más estricto (era 45)
+                    
+                    # DYNAMIC: RSI threshold based on regime
+                    if rsi < regime_info.get('rsi_oversold', 40):
                         score += 1
                         reasons.append(f"RSI:{rsi:.0f}")
-                    if prob > 0.55:  # Umbral más alto (era 0.48)
+                    
+                    # DYNAMIC: Probability threshold based on regime
+                    if prob > regime_info.get('prob_threshold_buy', 0.55):
                         score += 1
                         reasons.append(f"PROB:{prob:.2f}")
-                    if prob > 0.62:  # Bonus por probabilidad fuerte
+                    
+                    # DYNAMIC: Strong prob bonus threshold
+                    if prob > regime_info.get('prob_bonus_threshold', 0.62):
                         score += 1
                         reasons.append("STRONG_PROB")
+                    
+                    # DYNAMIC: Trend points based on regime
                     if current_price > ema:
-                        score += 1
+                        score += regime_info.get('trend_points', 1)
                         reasons.append("TREND")
                 
                 if score >= ENTRY_THRESHOLD:
-                    print(f"\nSIGNAL: BUY (Score: {score}) | {' + '.join(reasons)}")
+                    print(f"\nSIGNAL: BUY (Score: {score}/{ENTRY_THRESHOLD}) | {' + '.join(reasons)}")
                     action = "BUY"
                     
             elif bias == "BEARISH_SCALPING":
                 score = 0
                 reasons = []
-                # Descarte más estricto: probabilidad muy alta = no vender
-                if prob > 0.60:
+                reasons.append(f"[{regime}]")  # Show regime in log
+                
+                # DYNAMIC: Use regime-specific discard threshold
+                if prob > regime_info.get('prob_discard_sell', 0.60):
                     score = -99
                 else:
+                    # DYNAMIC: BB points based on regime
                     if current_price >= upper_band * 0.995:
-                        score += 2
+                        score += regime_info.get('bb_points', 2)
                         reasons.append("PEAK")
-                    if rsi > 60:  # RSI más estricto (era 55)
+                    
+                    # DYNAMIC: RSI threshold based on regime
+                    if rsi > regime_info.get('rsi_overbought', 60):
                         score += 1
                         reasons.append(f"RSI:{rsi:.0f}")
-                    if prob < 0.45:  # Umbral más estricto (era 0.52)
+                    
+                    # DYNAMIC: Probability threshold based on regime
+                    if prob < regime_info.get('prob_threshold_sell', 0.45):
                         score += 1
                         reasons.append(f"PROB:{prob:.2f}")
+                    
+                    # DYNAMIC: Trend points based on regime
                     if current_price < ema:
-                        score += 1
+                        score += regime_info.get('trend_points', 1)
                         reasons.append("TREND")
-                    if prob < 0.38:  # Bonus por probabilidad muy baja (era 0.45)
+                    
+                    # DYNAMIC: Strong prob bonus (using inverted threshold)
+                    if prob < (1.0 - regime_info.get('prob_bonus_threshold', 0.62)):
                         score += 1
                         reasons.append("STRONG_PROB")
                 
                 if score >= ENTRY_THRESHOLD:
-                    print(f"\nSIGNAL: SELL (Score: {score}) | {' + '.join(reasons)}")
+                    print(f"\nSIGNAL: SELL (Score: {score}/{ENTRY_THRESHOLD}) | {' + '.join(reasons)}")
                     action = "SELL"
             
             # Execute Trade

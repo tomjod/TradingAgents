@@ -26,7 +26,8 @@ config = load_config()
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Configuration
-BIAS_FILE = os.path.join(PROJECT_ROOT, config["bias_file"])
+AI_BIAS_FILE = os.path.join(PROJECT_ROOT, "ai_bias.json")  # AI writes here
+BIAS_FILE = os.path.join(PROJECT_ROOT, config["bias_file"])  # Fallback for soldier
 SYMBOL = config["symbol"]
 INTERVAL_SECONDS = config.get("interval_seconds", 900)
 
@@ -34,11 +35,18 @@ def update_bias(bias, reasoning):
     data = {
         "bias": bias,
         "last_update": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": "ai_agents",  # Mark source so tactical can identify
         "reasoning": reasoning
     }
     
+    # Write to AI-specific file (tactical reads this)
+    with open(AI_BIAS_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+    
+    # Also write to main bias file (soldier reads this as fallback)
     with open(BIAS_FILE, "w") as f:
         json.dump(data, f, indent=4)
+    
     print(f"Updated Bias to: {bias}")
 
 def get_general_decision(graph):

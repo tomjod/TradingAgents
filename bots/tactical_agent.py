@@ -46,15 +46,20 @@ USE_MTF = TACTICAL_CONFIG.get("use_mtf", True)
 RESPECT_AI_BIAS = TACTICAL_CONFIG.get("respect_ai_bias", True)  # Hybrid mode
 AI_BIAS_STALE_MINUTES = TACTICAL_CONFIG.get("ai_bias_stale_minutes", 10)  # Override AI if stale
 
+# Separate files for AI and tactical output
+AI_BIAS_FILE = os.path.join(PROJECT_ROOT, "ai_bias.json")  # Read AI bias from here
+
 
 def get_ai_strategic_bias():
     """
     Read the current bias from AI agents (general.py).
+    Reads from ai_bias.json (separate from tactical output).
     Returns: (bias, source, age_minutes, reasoning)
     """
     try:
-        if os.path.exists(BIAS_FILE):
-            with open(BIAS_FILE, "r") as f:
+        # Read from AI-specific file (written by general.py)
+        if os.path.exists(AI_BIAS_FILE):
+            with open(AI_BIAS_FILE, "r") as f:
                 data = json.load(f)
             
             bias = data.get("bias", "NEUTRAL")
