@@ -19,8 +19,8 @@ max_spread: 180
 cut_loss_points: 10000 # Cut loss if position goes -10000 points (change as needed)
 
 # Trailing Stop (ensure minimum profit)
-trailing_stop_start: 100 # Start trailing after 100 points profit (~$0.10)
-trailing_step: 50 # Move SL every 50 points
+trailing_stop_start: 200 # Start trailing after 100 points profit (~$0.10)
+trailing_step: 100 # Move SL every 50 points
 
 # Strategy
 max_positions: 6 # Like reference bot (can hold 6 positions simultaneously)

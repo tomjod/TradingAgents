@@ -327,6 +327,85 @@ def get_higher_timeframe_trend():
         print(f"MTF Error: {e}")
         return 'NEUTRAL', {}
 
+def detect_market_regime():
+    """
+    Detect market regime: TRENDING, RANGING, or VOLATILE
+    Returns regime and recommended strategy adjustments
+    """
+    try:
+        # Get H1 data for regime detection
+        h1_rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_H1, 0, 30)
+        if h1_rates is None:
+            return 'UNKNOWN', {}
+        
+        h1_df = pd.DataFrame(h1_rates)
+        
+        # Calculate ATR (volatility)
+        h1_df['tr'] = np.maximum(
+            h1_df['high'] - h1_df['low'],
+            np.maximum(
+                abs(h1_df['high'] - h1_df['close'].shift(1)),
+                abs(h1_df['low'] - h1_df['close'].shift(1))
+            )
+        )
+        atr_14 = h1_df['tr'].rolling(14).mean().iloc[-1]
+        atr_avg = h1_df['tr'].rolling(14).mean().mean()  # Historical average
+        
+        # ATR ratio (current vs average)
+        atr_ratio = atr_14 / atr_avg if atr_avg > 0 else 1.0
+        
+        # Calculate ADX (trend strength)
+        # Simplified ADX calculation
+        h1_df['dm_plus'] = np.where(
+            (h1_df['high'] - h1_df['high'].shift(1)) > (h1_df['low'].shift(1) - h1_df['low']),
+            np.maximum(h1_df['high'] - h1_df['high'].shift(1), 0),
+            0
+        )
+        h1_df['dm_minus'] = np.where(
+            (h1_df['low'].shift(1) - h1_df['low']) > (h1_df['high'] - h1_df['high'].shift(1)),
+            np.maximum(h1_df['low'].shift(1) - h1_df['low'], 0),
+            0
+        )
+        
+        smoothed_tr = h1_df['tr'].rolling(14).sum()
+        smoothed_dm_plus = h1_df['dm_plus'].rolling(14).sum()
+        smoothed_dm_minus = h1_df['dm_minus'].rolling(14).sum()
+        
+        di_plus = 100 * (smoothed_dm_plus / smoothed_tr)
+        di_minus = 100 * (smoothed_dm_minus / smoothed_tr)
+        dx = 100 * abs(di_plus - di_minus) / (di_plus + di_minus + 0.001)
+        adx = dx.rolling(14).mean().iloc[-1]
+        
+        # Determine regime
+        regime_info = {
+            'atr_ratio': round(atr_ratio, 2),
+            'adx': round(adx, 1) if not np.isnan(adx) else 0,
+            'trailing_multiplier': 1.0,
+            'entry_threshold': 3
+        }
+        
+        if atr_ratio > 1.5:
+            # HIGH VOLATILITY - be cautious
+            regime = 'VOLATILE'
+            regime_info['trailing_multiplier'] = 1.5  # Wider trailing stop
+            regime_info['entry_threshold'] = 4  # Stricter entry
+        elif adx > 25:
+            # TRENDING - ride the trend
+            regime = 'TRENDING'
+            regime_info['trailing_multiplier'] = 0.8  # Tighter trailing to lock profits
+            regime_info['entry_threshold'] = 3
+        else:
+            # RANGING - mean reversion
+            regime = 'RANGING'
+            regime_info['trailing_multiplier'] = 1.2
+            regime_info['entry_threshold'] = 4  # Stricter in ranges
+        
+        return regime, regime_info
+        
+    except Exception as e:
+        print(f"Regime Detection Error: {e}")
+        return 'UNKNOWN', {}
+
 def calculate_features(df):
     stock = wrap(df)
     
@@ -404,7 +483,70 @@ def calculate_features(df):
         df_calc['ny_session'] = ((df_calc['hour'] >= 13) & (df_calc['hour'] <= 21)).astype(int)
         df_calc['overlap_session'] = ((df_calc['hour'] >= 13) & (df_calc['hour'] <= 16)).astype(int)
     
-    # Feature list matching training (36 features)
+    # 8. H1 Features (for v3 model with 42 features)
+    try:
+        h1_rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_H1, 0, 20)
+        if h1_rates is not None:
+            h1_df = pd.DataFrame(h1_rates)
+            
+            # H1 RSI
+            delta = h1_df['close'].diff()
+            gain = delta.where(delta > 0, 0).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            rs = gain / loss
+            h1_rsi = (100 - (100 / (1 + rs))).iloc[-1]
+            df_calc.loc[df_calc.index[-1], 'h1_rsi'] = h1_rsi if not np.isnan(h1_rsi) else 50
+            
+            # H1 ADX (simplified)
+            h1_df['tr'] = np.maximum(h1_df['high'] - h1_df['low'],
+                np.maximum(abs(h1_df['high'] - h1_df['close'].shift(1)),
+                           abs(h1_df['low'] - h1_df['close'].shift(1))))
+            h1_atr = h1_df['tr'].rolling(14).mean().iloc[-1]
+            df_calc.loc[df_calc.index[-1], 'h1_adx'] = 25  # Placeholder, needs full ADX calc
+            
+            # H1 Trend
+            h1_ema_10 = h1_df['close'].ewm(span=10).mean().iloc[-1]
+            h1_ema_20 = h1_df['close'].ewm(span=20).mean().iloc[-1]
+            h1_close = h1_df['close'].iloc[-1]
+            
+            if h1_close > h1_ema_10 > h1_ema_20:
+                h1_trend = 2
+            elif h1_close > h1_ema_20:
+                h1_trend = 1
+            elif h1_close < h1_ema_10 < h1_ema_20:
+                h1_trend = -2
+            elif h1_close < h1_ema_20:
+                h1_trend = -1
+            else:
+                h1_trend = 0
+            df_calc.loc[df_calc.index[-1], 'h1_trend'] = h1_trend
+            
+            # Derived H1 features
+            m5_rsi = df_calc['rsi_14'].iloc[-1]
+            m5_ema_10 = df_calc['close_10_ema'].iloc[-1]
+            m5_atr = df_calc['atr'].iloc[-1]
+            
+            df_calc.loc[df_calc.index[-1], 'h1_rsi_diff'] = m5_rsi - h1_rsi if not np.isnan(h1_rsi) else 0
+            df_calc.loc[df_calc.index[-1], 'm5_h1_ema_ratio'] = m5_ema_10 / h1_ema_10 if h1_ema_10 > 0 else 1.0
+            df_calc.loc[df_calc.index[-1], 'atr_ratio_h1'] = m5_atr / h1_atr if h1_atr > 0 else 1.0
+        else:
+            # Fallback values if H1 data unavailable
+            df_calc.loc[df_calc.index[-1], 'h1_rsi'] = 50
+            df_calc.loc[df_calc.index[-1], 'h1_adx'] = 25
+            df_calc.loc[df_calc.index[-1], 'h1_trend'] = 0
+            df_calc.loc[df_calc.index[-1], 'h1_rsi_diff'] = 0
+            df_calc.loc[df_calc.index[-1], 'm5_h1_ema_ratio'] = 1.0
+            df_calc.loc[df_calc.index[-1], 'atr_ratio_h1'] = 1.0
+    except Exception as e:
+        # Fallback values on error
+        df_calc.loc[df_calc.index[-1], 'h1_rsi'] = 50
+        df_calc.loc[df_calc.index[-1], 'h1_adx'] = 25
+        df_calc.loc[df_calc.index[-1], 'h1_trend'] = 0
+        df_calc.loc[df_calc.index[-1], 'h1_rsi_diff'] = 0
+        df_calc.loc[df_calc.index[-1], 'm5_h1_ema_ratio'] = 1.0
+        df_calc.loc[df_calc.index[-1], 'atr_ratio_h1'] = 1.0
+    
+    # Feature list matching training (42 features for v3 model)
     features = [
         # Basic indicators
         'rsi_14', 'rsi_6', 'rsi_slope',
@@ -424,6 +566,9 @@ def calculate_features(df):
     # Add time features if available
     if 'hour' in df_calc.columns:
         features += ['hour', 'day_of_week', 'london_session', 'ny_session', 'overlap_session']
+    
+    # Add H1 features (v3 model)
+    features += ['h1_rsi', 'h1_adx', 'h1_trend', 'h1_rsi_diff', 'm5_h1_ema_ratio', 'atr_ratio_h1']
     
     # Get last row, fill NaN with 0
     last_row = df_calc.iloc[[-1]][features].fillna(0)
@@ -842,9 +987,14 @@ async def signal_finder(state):
             # Get higher timeframe trend (H1 + M15)
             htf_trend, trend_info = get_higher_timeframe_trend()
             
+            # Get market regime (TRENDING/RANGING/VOLATILE)
+            regime, regime_info = detect_market_regime()
+            
+            # Dynamic entry threshold based on regime
+            ENTRY_THRESHOLD = regime_info.get('entry_threshold', 3)
+            
             # Entry Logic with Multi-Timeframe Filter
             action = "HOLD"
-            ENTRY_THRESHOLD = 3
             
             # Multi-timeframe alignment check
             # BUY only if H1 trend is UP or NEUTRAL

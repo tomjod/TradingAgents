@@ -4,9 +4,9 @@
     "reg_lambda": 0,
     "reg_alpha": 0,
     "num_leaves": 31,
-    "n_estimators": 800,
+    "n_estimators": 300,
     "min_child_samples": 50,
-    "max_depth": 7,
+    "max_depth": 15,
     "learning_rate": 0.01,
     "colsample_bytree": 0.8
   },
@@ -46,9 +46,16 @@
     "day_of_week",
     "london_session",
     "ny_session",
-    "overlap_session"
+    "overlap_session",
+    "h1_rsi",
+    "h1_adx",
+    "h1_trend",
+    "h1_rsi_diff",
+    "m5_h1_ema_ratio",
+    "atr_ratio_h1"
   ],
-  "accuracy": 0.5852340936374549,
-  "f1_score": 0.5902352243526389,
-  "scale_pos_weight": 1.670688617052523
+  "accuracy": 0.6636942675159235,
+  "f1_score": 0.5914718019257221,
+  "scale_pos_weight": 1.790709320070997,
+  "has_h1_features": true
 }
