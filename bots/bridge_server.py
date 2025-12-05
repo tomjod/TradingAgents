@@ -171,6 +171,20 @@ class TradingBridge:
                     self.tick_queue.put(data)
                 if self.on_tick_callback:
                     self.on_tick_callback(data)
+            
+            elif msg_type == 'candle':
+                # Incoming historical candle
+                if hasattr(self, '_history_buffer'):
+                    self._history_buffer.append(data)
+                    
+            elif msg_type == 'history_start':
+                self._history_buffer = []
+                print(f"📥 Receiving history: {data.get('count')} candles...")
+                
+            elif msg_type == 'history_end':
+                print(f"✅ History received: {len(self._history_buffer)} candles")
+                self.response_queue.put({'type': 'history_data', 'data': self._history_buffer})
+                delattr(self, '_history_buffer')
                     
             elif msg_type == 'execution':
                 self.response_queue.put(data)
@@ -265,6 +279,11 @@ class TradingBridge:
     def get_account(self):
         """Request account info from EA"""
         command = {"action": "GET_ACCOUNT"}
+        self.command_queue.put(command)
+        
+    def get_history(self, count=500):
+        """Request historical M5 candles"""
+        command = {"action": "GET_HISTORY", "count": count}
         self.command_queue.put(command)
     
     def ping(self):

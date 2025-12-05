@@ -95,9 +95,17 @@ void OnTimer()
     MqlTick tick;
     if(!SymbolInfoTick(InpSymbol, tick)) return;
     
-    // Only send if tick changed
-    if(tick.time == g_lastTickTime) return;
+    // Only send if tick changed (Price or Time)
+    static double last_bid = 0.0;
+    static double last_ask = 0.0;
+    
+    if(tick.time == g_lastTickTime && 
+       tick.bid == last_bid && 
+       tick.ask == last_ask) return;
+       
     g_lastTickTime = tick.time;
+    last_bid = tick.bid;
+    last_ask = tick.ask;
     
     // Build tick message
     string msg = StringFormat(
@@ -216,6 +224,12 @@ void ProcessCommand(string json)
     {
         SendAccountInfo();
     }
+    else if(action == "GET_HISTORY")
+    {
+        int count = (int)StringToInteger(GetJsonValue(json, "count"));
+        if(count <= 0) count = 200; // Default
+        SendHistory(count);
+    }
     else if(action == "PING")
     {
         SendMessage("{\"type\":\"pong\",\"time\":\"" + TimeToString(TimeCurrent()) + "\"}");
@@ -224,6 +238,46 @@ void ProcessCommand(string json)
     {
         Print("Unknown action: ", action);
     }
+}
+
+//+------------------------------------------------------------------+
+//| Send historical data                                               |
+//+------------------------------------------------------------------+
+void SendHistory(int count)
+{
+    MqlRates rates[];
+    ArraySetAsSeries(rates, true);
+    
+    int copied = CopyRates(InpSymbol, PERIOD_M5, 0, count, rates);
+    if(copied <= 0)
+    {
+        Print("Failed to copy rates: ", GetLastError());
+        return;
+    }
+    
+    Print("Sending ", copied, " M5 candles...");
+    
+    // Send start marker
+    SendMessage("{\"type\":\"history_start\",\"count\":" + IntegerToString(copied) + "}");
+    
+    // Send each candle individually to avoid buffer overflow
+    for(int i = copied - 1; i >= 0; i--)
+    {
+        string candle = StringFormat(
+            "{\"type\":\"candle\",\"time\":\"%s\",\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f,\"tick_vol\":%I64d}",
+            TimeToString(rates[i].time, TIME_DATE|TIME_MINUTES),
+            rates[i].open,
+            rates[i].high,
+            rates[i].low,
+            rates[i].close,
+            rates[i].tick_volume
+        );
+        SendMessage(candle);
+    }
+    
+    // Send end marker
+    SendMessage("{\"type\":\"history_end\"}");
+    Print("History sent.");
 }
 
 //+------------------------------------------------------------------+
