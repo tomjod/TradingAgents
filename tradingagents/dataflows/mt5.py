@@ -170,6 +170,110 @@ def _get_mt5_data_df(symbol, start_date, end_date):
     df['volume'] = df['tick_volume'] 
     return df
 
+def get_mt5_h1_analysis(
+    symbol: Annotated[str, "ticker symbol"],
+) -> str:
+    """
+    Get H1 (hourly) timeframe analysis including RSI, EMAs, and trend direction.
+    This provides multi-timeframe context for trading decisions.
+    """
+    try:
+        if not initialize_mt5():
+            return "Error initializing MT5"
+        
+        # Get last 50 H1 candles
+        h1_rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_H1, 0, 50)
+        
+        if h1_rates is None:
+            return f"No H1 data found for {symbol}"
+        
+        df = pd.DataFrame(h1_rates)
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        
+        # Calculate RSI
+        delta = df['close'].diff()
+        gain = delta.where(delta > 0, 0).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rs = gain / loss
+        df['rsi'] = 100 - (100 / (1 + rs))
+        
+        # Calculate EMAs
+        df['ema_10'] = df['close'].ewm(span=10).mean()
+        df['ema_20'] = df['close'].ewm(span=20).mean()
+        df['ema_50'] = df['close'].ewm(span=50).mean()
+        
+        # Calculate ATR
+        df['tr'] = pd.concat([
+            df['high'] - df['low'],
+            abs(df['high'] - df['close'].shift(1)),
+            abs(df['low'] - df['close'].shift(1))
+        ], axis=1).max(axis=1)
+        df['atr'] = df['tr'].rolling(14).mean()
+        
+        # Get latest values
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        
+        close = last['close']
+        rsi = last['rsi']
+        ema_10 = last['ema_10']
+        ema_20 = last['ema_20']
+        ema_50 = last['ema_50']
+        atr = last['atr']
+        
+        # Determine trend
+        if close > ema_10 > ema_20 > ema_50:
+            trend = "STRONG UPTREND"
+            trend_score = 3
+        elif close > ema_20:
+            trend = "UPTREND"
+            trend_score = 2
+        elif close < ema_10 < ema_20 < ema_50:
+            trend = "STRONG DOWNTREND"
+            trend_score = -3
+        elif close < ema_20:
+            trend = "DOWNTREND"
+            trend_score = -2
+        else:
+            trend = "RANGING/NEUTRAL"
+            trend_score = 0
+        
+        # RSI interpretation
+        if rsi > 70:
+            rsi_signal = "OVERBOUGHT (consider selling)"
+        elif rsi < 30:
+            rsi_signal = "OVERSOLD (consider buying)"
+        elif rsi > 50:
+            rsi_signal = "Bullish momentum"
+        else:
+            rsi_signal = "Bearish momentum"
+        
+        # Format output
+        output = f"""## H1 (Hourly) Timeframe Analysis for {symbol}
+
+**Current Price:** {close:.2f}
+**H1 RSI(14):** {rsi:.1f} - {rsi_signal}
+
+**H1 Moving Averages:**
+- EMA 10: {ema_10:.2f} {'(price above)' if close > ema_10 else '(price below)'}
+- EMA 20: {ema_20:.2f} {'(price above)' if close > ema_20 else '(price below)'}
+- EMA 50: {ema_50:.2f} {'(price above)' if close > ema_50 else '(price below)'}
+
+**H1 Trend:** {trend} (Score: {trend_score})
+**H1 ATR:** {atr:.2f} (volatility measure)
+
+**Multi-Timeframe Recommendation:**
+- If H1 is UPTREND: Only take BUY signals on lower timeframes (M5)
+- If H1 is DOWNTREND: Only take SELL signals on lower timeframes (M5)
+- If H1 is RANGING: Be cautious, use tighter stops
+"""
+        return output
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return f"Error in get_mt5_h1_analysis: {e}"
+
 def get_mt5_indicators(
     symbol: Annotated[str, "ticker symbol"],
     indicator: Annotated[str, "technical indicator or comma-separated list like 'rsi,macd,boll'"],

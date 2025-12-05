@@ -24,6 +24,9 @@ class RiskGuardian:
         # Load config
         kill_switch_config = config.get("kill_switch", {})
         
+        # Check if kill switch is enabled
+        self.enabled = kill_switch_config.get("enabled", True)
+        
         self.daily_loss_limit = kill_switch_config.get("daily_loss_limit", 0.02)  # 2%
         self.max_drawdown = kill_switch_config.get("max_drawdown", 0.05)  # 5%
         self.volatility_spread = kill_switch_config.get("volatility_spread", 50)  # points
@@ -42,9 +45,12 @@ class RiskGuardian:
         self._check_daily_reset()
         
         print(f"🛡️ Risk Guardian initialized")
-        print(f"   Daily Loss Limit: {self.daily_loss_limit*100:.1f}%")
-        print(f"   Max Drawdown: {self.max_drawdown*100:.1f}%")
-        print(f"   Volatility Spread: {self.volatility_spread} points")
+        if self.enabled:
+            print(f"   Daily Loss Limit: {self.daily_loss_limit*100:.1f}%")
+            print(f"   Max Drawdown: {self.max_drawdown*100:.1f}%")
+            print(f"   Volatility Spread: {self.volatility_spread} points")
+        else:
+            print(f"   ⚠️ KILL SWITCH DISABLED")
     
     def _load_state(self) -> dict:
         """Load state from file or create default"""
@@ -135,6 +141,10 @@ class RiskGuardian:
         Main check - Can we trade right now?
         Returns: (allowed, reason)
         """
+        # If kill switch is disabled, always allow trading
+        if not self.enabled:
+            return True, "Kill switch disabled"
+        
         # Check if kill switch is already active
         if self.state["kill_switch_active"]:
             return False, "Kill switch active until tomorrow"

@@ -54,15 +54,58 @@ TIMEFRAME = TIMEFRAME_MAP.get(config["timeframe"], mt5.TIMEFRAME_M5)
 
 MODEL_PATH = os.path.join(PROJECT_ROOT, config["model_path"])
 BIAS_FILE = os.path.join(PROJECT_ROOT, config["bias_file"])
+
+# Config file path for hot-reload
+CONFIG_PATH = os.path.join(PROJECT_ROOT, "config.yaml")
+_config_mtime = os.path.getmtime(CONFIG_PATH)
+
+def reload_config():
+    """Hot-reload config if file changed"""
+    global config, _config_mtime
+    global TRAILING_STOP_START, TRAILING_STEP, TRAILING_TP_DISTANCE
+    global MAX_POSITIONS, CUT_LOSS_POINTS, TRADE_COOLDOWN, MAX_SPREAD
+    global TRADING_HOURS_ENABLED, TRADING_START_HOUR, TRADING_END_HOUR, TRADE_WEEKENDS
+    
+    try:
+        current_mtime = os.path.getmtime(CONFIG_PATH)
+        if current_mtime > _config_mtime:
+            with open(CONFIG_PATH, "r") as f:
+                config = yaml.safe_load(f)
+            _config_mtime = current_mtime
+            
+            # Reload trading parameters
+            TRAILING_STOP_START = config["trailing_stop_start"]
+            TRAILING_STEP = config["trailing_step"]
+            TRAILING_TP_DISTANCE = config.get("trailing_tp_distance", 500)
+            MAX_POSITIONS = config["max_positions"]
+            CUT_LOSS_POINTS = config.get("cut_loss_points", 2000)
+            TRADE_COOLDOWN = config.get("trade_cooldown", 120)
+            MAX_SPREAD = config["max_spread"]
+            
+            # Trading hours
+            TRADING_HOURS = config.get("trading_hours", {})
+            TRADING_HOURS_ENABLED = TRADING_HOURS.get("enabled", False)
+            TRADING_START_HOUR = TRADING_HOURS.get("start_hour", 0)
+            TRADING_END_HOUR = TRADING_HOURS.get("end_hour", 23)
+            TRADE_WEEKENDS = TRADING_HOURS.get("trade_weekends", False)
+            
+            print("🔄 Config reloaded!")
+            return True
+    except Exception as e:
+        print(f"⚠️ Config reload error: {e}")
+    return False
+
+# Initial values (will be hot-reloaded)
 VOLUME = config["volume"]
 SL_POINTS = config["sl_points"]
 TP_POINTS = config["tp_points"]
 MAX_SPREAD = config["max_spread"]
 TRAILING_STOP_START = config["trailing_stop_start"]
 TRAILING_STEP = config["trailing_step"]
+TRAILING_TP_DISTANCE = config.get("trailing_tp_distance", 500)
 MAX_POSITIONS = config["max_positions"]
-CUT_LOSS_POINTS = config.get("cut_loss_points", 2000)  # Default to 2000 if not set
-TRADE_COOLDOWN = config.get("trade_cooldown", 120)  # Seconds between trades
+CUT_LOSS_POINTS = config.get("cut_loss_points", 2000)
+TRADE_COOLDOWN = config.get("trade_cooldown", 120)
 
 # Trading Hours Config
 TRADING_HOURS = config.get("trading_hours", {})
@@ -864,6 +907,37 @@ async def position_monitor(state):
                                 if result and result.retcode == mt5.TRADE_RETCODE_DONE:
                                     print(f"📉 Trailing SL: #{p.ticket} → {new_sl:.2f}")
                     
+                    # TRAILING TP (Dynamic Take Profit)
+                    if current_profit_points > 50:  # Only start trailing TP after 50 points profit
+                        if pos_type == 'BUY':
+                            new_tp = tick.bid + TRAILING_TP_DISTANCE * point
+                            # Only move TP if it's higher than current TP (or no TP set)
+                            if p.tp == 0 or new_tp > p.tp + 50 * point:
+                                request = {
+                                    "action": mt5.TRADE_ACTION_SLTP,
+                                    "symbol": SYMBOL,
+                                    "position": p.ticket,
+                                    "sl": p.sl,
+                                    "tp": new_tp,
+                                }
+                                result = mt5.order_send(request)
+                                if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                    print(f"🎯 Trailing TP: #{p.ticket} → {new_tp:.2f}")
+                        else:  # SELL
+                            new_tp = tick.ask - TRAILING_TP_DISTANCE * point
+                            # Only move TP if it's lower than current TP (or no TP set)
+                            if p.tp == 0 or new_tp < p.tp - 50 * point:
+                                request = {
+                                    "action": mt5.TRADE_ACTION_SLTP,
+                                    "symbol": SYMBOL,
+                                    "position": p.ticket,
+                                    "sl": p.sl,
+                                    "tp": new_tp,
+                                }
+                                result = mt5.order_send(request)
+                                if result and result.retcode == mt5.TRADE_RETCODE_DONE:
+                                    print(f"🎯 Trailing TP: #{p.ticket} → {new_tp:.2f}")
+                    
                     # SMART EXIT
                     should_close = False
                     close_reason = ""
@@ -921,6 +995,9 @@ async def signal_finder(state):
     
     while state.running:
         try:
+            # Hot-reload config
+            reload_config()
+            
             if not mt5.terminal_info():
                 await asyncio.sleep(5)
                 continue

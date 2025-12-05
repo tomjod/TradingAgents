@@ -21,10 +21,11 @@ cut_loss_points: 10000 # Cut loss if position goes -10000 points (change as need
 # Trailing Stop (ensure minimum profit)
 trailing_stop_start: 200 # Start trailing after 100 points profit (~$0.10)
 trailing_step: 100 # Move SL every 50 points
+trailing_tp_distance: 500 # Keep TP this many points ahead of price
 
 # Strategy
 max_positions: 6 # Like reference bot (can hold 6 positions simultaneously)
-interval_seconds: 340 # General Agent loop interval
+interval_seconds: 180 # General Agent loop interval
 trade_cooldown: 120 # Seconds to wait after opening a trade before opening another
 
 # Trading Hours (UTC-3, Argentina time)
@@ -37,6 +38,7 @@ trading_hours:
 
 # Kill Switch Risk Management
 kill_switch:
+  enabled: false # SET TO true TO ACTIVATE
   daily_loss_limit: 0.02 # 2% max loss per day -> stop trading
   max_drawdown: 0.05 # 5% from peak -> reduce lot 50%
   volatility_spread: 50 # Max spread to trade (points)

@@ -2,7 +2,7 @@ from typing import Annotated
 
 # Import from vendor-specific modules
 from .local import get_YFin_data, get_finnhub_news, get_finnhub_company_insider_sentiment, get_finnhub_company_insider_transactions, get_simfin_balance_sheet, get_simfin_cashflow, get_simfin_income_statements, get_reddit_global_news, get_reddit_company_news
-from .mt5 import get_mt5_data, get_mt5_indicators, execute_mt5_order, get_mt5_positions, get_mt5_history
+from .mt5 import get_mt5_data, get_mt5_indicators, execute_mt5_order, get_mt5_positions, get_mt5_history, get_mt5_h1_analysis
 from .y_finance import get_YFin_data_online, get_stock_stats_indicators_window, get_balance_sheet as get_yfinance_balance_sheet, get_cashflow as get_yfinance_cashflow, get_income_statement as get_yfinance_income_statement, get_insider_transactions as get_yfinance_insider_transactions
 from .google import get_google_news, get_global_google_news
 from .openai import get_stock_news_openai, get_global_news_openai, get_fundamentals_openai
@@ -58,7 +58,8 @@ TOOLS_CATEGORIES = {
         "tools": [
             "execute_order",
             "get_open_positions",
-            "get_trade_history"
+            "get_trade_history",
+            "get_h1_analysis"
         ]
     }
 }
@@ -136,6 +137,9 @@ VENDOR_METHODS = {
     },
     "get_trade_history": {
         "mt5": get_mt5_history,
+    },
+    "get_h1_analysis": {
+        "mt5": get_mt5_h1_analysis,
     }
 }
 
