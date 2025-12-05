@@ -839,9 +839,26 @@ async def signal_finder(state):
                 await asyncio.sleep(10)
                 continue
             
-            # Entry Logic
+            # Get higher timeframe trend (H1 + M15)
+            htf_trend, trend_info = get_higher_timeframe_trend()
+            
+            # Entry Logic with Multi-Timeframe Filter
             action = "HOLD"
             ENTRY_THRESHOLD = 3
+            
+            # Multi-timeframe alignment check
+            # BUY only if H1 trend is UP or NEUTRAL
+            # SELL only if H1 trend is DOWN or NEUTRAL
+            
+            if bias == "BULLISH_SCALPING" and htf_trend == "DOWN":
+                # H1 is bearish, skip BUY signals on M5
+                await asyncio.sleep(5)
+                continue
+            
+            if bias == "BEARISH_SCALPING" and htf_trend == "UP":
+                # H1 is bullish, skip SELL signals on M5
+                await asyncio.sleep(5)
+                continue
             
             if bias == "BULLISH_SCALPING":
                 score = 0
