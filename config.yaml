@@ -55,3 +55,25 @@ tactical_agent:
   respect_ai_bias: true # HYBRID MODE: only update when aligned with AI agents
   ai_bias_stale_minutes: 10 # Override AI bias if older than this
 
+# News Filter (Alpha Vantage API)
+news_filter:
+  enabled: true
+  pause_minutes_before: 30 # Pause trading 30 min before high-impact news
+  pause_minutes_after: 30 # Pause trading 30 min after high-impact news
+  cache_duration_minutes: 60 # Cache news for 60 minutes
+  # Keywords that trigger trading pause (Gold-related)
+  high_impact_keywords:
+    - "federal reserve"
+    - "interest rate"
+    - "fomc"
+    - "jerome powell"
+    - "inflation"
+    - "cpi"
+    - "consumer price"
+    - "non-farm"
+    - "nonfarm"
+    - "employment"
+    - "gdp"
+    - "treasury"
+    - "dollar"
+    - "usd"

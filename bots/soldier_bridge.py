@@ -23,6 +23,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 from bots.bridge_server import TradingBridge
 from bots.risk_guardian import RiskGuardian
+from bots.news_filter import NewsFilter
 
 
 def load_config():
@@ -167,6 +168,14 @@ class BridgeSoldier:
         # Initialize Risk Guardian
         self.guardian = RiskGuardian(config)
         
+        # Initialize News Filter
+        self.news_filter = NewsFilter(config)
+        
+        # Dynamic Lot Sizing Parameters
+        self.risk_percent = config.get("risk_percent", 0.01)  # 1% risk per trade
+        self.min_lot = 0.01
+        self.max_lot = 1.0
+        
         self.running = False
         self.last_trade_time = 0
         self.last_analysis_time = 0
@@ -207,6 +216,60 @@ class BridgeSoldier:
             return data.get("bias", "NEUTRAL")
         except:
             return "NEUTRAL"
+    
+    def calculate_dynamic_lot(self, sl_points: int) -> float:
+        """
+        Calculate dynamic lot size based on risk percentage.
+        
+        Formula:
+        Risk Amount = Equity * Risk %
+        Lot Size = Risk Amount / (SL Points * Point Value per Lot)
+        
+        For XAUUSDm: 1 point = $0.01 per lot (0.01 * 100 XAU)
+        """
+        try:
+            # Get current equity from MT5
+            account = mt5.account_info()
+            if not account:
+                print("⚠️ Cannot get account info, using min lot")
+                return self.min_lot
+            
+            equity = account.equity
+            
+            # Calculate risk amount
+            risk_amount = equity * self.risk_percent
+            
+            # Point value for XAUUSD: Each point = $0.01 per 0.01 lot
+            # So for 1.0 lot, each point = $1.00
+            # For SL of 500 points with 1.0 lot = $500 risk
+            point_value_per_lot = 1.0  # $1 per point per lot for XAUUSD
+            
+            # Apply lot multiplier from RiskGuardian (reduces lot in drawdown)
+            lot_multiplier = self.guardian.get_lot_multiplier()
+            
+            # Calculate lot size
+            if sl_points > 0:
+                lot_size = risk_amount / (sl_points * point_value_per_lot)
+            else:
+                lot_size = self.min_lot
+            
+            # Apply lot multiplier
+            lot_size *= lot_multiplier
+            
+            # Clamp to min/max
+            lot_size = max(self.min_lot, min(self.max_lot, lot_size))
+            
+            # Round to 2 decimal places
+            lot_size = round(lot_size, 2)
+            
+            print(f"📊 Dynamic Lot: {lot_size} (Risk: ${risk_amount:.2f}, SL: {sl_points}pts, Mult: {lot_multiplier})")
+            
+            return lot_size
+            
+        except Exception as e:
+            print(f"⚠️ Lot calc error: {e}, using min lot")
+            return self.min_lot
+
     
     def on_connect(self, address):
         print(f"🔗 EA Connected from {address}")
@@ -894,13 +957,22 @@ class BridgeSoldier:
             
             # Signal
             if score >= params['entry_threshold']:
+                # News Filter Check
+                can_trade_news, news_reason = self.news_filter.can_trade()
+                if not can_trade_news:
+                    print(f"\n📰 News Filter blocked: {news_reason}")
+                    return
+                
+                # Calculate dynamic lot size
+                lot_size = self.calculate_dynamic_lot(SL_POINTS)
+                
                 if bias == "BULLISH_SCALPING":
-                    print(f"\n🚀 BUY SIGNAL! Score: {score} | {reasons}")
-                    self.bridge.buy(0.01, SL_POINTS, 0, "BridgeSoldier")
+                    print(f"\n🚀 BUY SIGNAL! Score: {score} | Lot: {lot_size} | {reasons}")
+                    self.bridge.buy(lot_size, SL_POINTS, 0, "BridgeSoldier")
                     self.last_trade_time = time.time()
                 elif bias == "BEARISH_SCALPING":
-                    print(f"\n🚀 SELL SIGNAL! Score: {score} | {reasons}")
-                    self.bridge.sell(0.01, SL_POINTS, 0, "BridgeSoldier")
+                    print(f"\n🚀 SELL SIGNAL! Score: {score} | Lot: {lot_size} | {reasons}")
+                    self.bridge.sell(lot_size, SL_POINTS, 0, "BridgeSoldier")
                     self.last_trade_time = time.time()
 
         except Exception as e:
