@@ -64,6 +64,33 @@ MAX_POSITIONS = config["max_positions"]
 CUT_LOSS_POINTS = config.get("cut_loss_points", 2000)  # Default to 2000 if not set
 TRADE_COOLDOWN = config.get("trade_cooldown", 120)  # Seconds between trades
 
+# Trading Hours Config
+TRADING_HOURS = config.get("trading_hours", {})
+TRADING_HOURS_ENABLED = TRADING_HOURS.get("enabled", False)
+TRADING_START_HOUR = TRADING_HOURS.get("start_hour", 0)
+TRADING_END_HOUR = TRADING_HOURS.get("end_hour", 23)
+TRADE_WEEKENDS = TRADING_HOURS.get("trade_weekends", False)
+
+def is_trading_time():
+    """Check if current time is within trading hours"""
+    if not TRADING_HOURS_ENABLED:
+        return True
+    
+    now = datetime.now()
+    current_hour = now.hour
+    day_of_week = now.weekday()  # 0=Monday, 6=Sunday
+    
+    # Check weekend
+    if not TRADE_WEEKENDS and day_of_week >= 5:  # Saturday=5, Sunday=6
+        return False
+    
+    # Check hours
+    if TRADING_START_HOUR <= TRADING_END_HOUR:
+        return TRADING_START_HOUR <= current_hour <= TRADING_END_HOUR
+    else:  # Handles overnight like 22:00 to 06:00
+        return current_hour >= TRADING_START_HOUR or current_hour <= TRADING_END_HOUR
+
+
 def check_trailing_stop(position):
     """
     Updates Stop Loss to lock in profits.
@@ -222,6 +249,83 @@ def get_data():
     df.rename(columns={'tick_volume': 'volume'}, inplace=True)
     
     return df
+
+def get_higher_timeframe_trend():
+    """
+    Analyze H1 and M15 timeframes to determine overall trend.
+    Returns: 'UP', 'DOWN', or 'NEUTRAL'
+    """
+    try:
+        # Get H1 data (last 50 candles)
+        h1_rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_H1, 0, 50)
+        if h1_rates is None:
+            return 'NEUTRAL', {}
+        
+        h1_df = pd.DataFrame(h1_rates)
+        
+        # Calculate H1 EMAs
+        h1_ema_10 = h1_df['close'].ewm(span=10).mean().iloc[-1]
+        h1_ema_20 = h1_df['close'].ewm(span=20).mean().iloc[-1]
+        h1_ema_50 = h1_df['close'].rolling(50).mean().iloc[-1]
+        h1_close = h1_df['close'].iloc[-1]
+        
+        # Calculate H1 RSI
+        delta = h1_df['close'].diff()
+        gain = delta.where(delta > 0, 0).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rs = gain / loss
+        h1_rsi = (100 - (100 / (1 + rs))).iloc[-1]
+        
+        # Get M15 data (last 50 candles)
+        m15_rates = mt5.copy_rates_from_pos(SYMBOL, mt5.TIMEFRAME_M15, 0, 50)
+        if m15_rates is None:
+            return 'NEUTRAL', {}
+        
+        m15_df = pd.DataFrame(m15_rates)
+        m15_ema_10 = m15_df['close'].ewm(span=10).mean().iloc[-1]
+        m15_ema_20 = m15_df['close'].ewm(span=20).mean().iloc[-1]
+        m15_close = m15_df['close'].iloc[-1]
+        
+        # Determine H1 trend
+        h1_trend_score = 0
+        if h1_close > h1_ema_10 > h1_ema_20:
+            h1_trend_score = 2  # Strong UP
+        elif h1_close > h1_ema_20:
+            h1_trend_score = 1  # Weak UP
+        elif h1_close < h1_ema_10 < h1_ema_20:
+            h1_trend_score = -2  # Strong DOWN
+        elif h1_close < h1_ema_20:
+            h1_trend_score = -1  # Weak DOWN
+        
+        # Determine M15 trend
+        m15_trend_score = 0
+        if m15_close > m15_ema_10 > m15_ema_20:
+            m15_trend_score = 1
+        elif m15_close < m15_ema_10 < m15_ema_20:
+            m15_trend_score = -1
+        
+        # Combined trend
+        total_score = h1_trend_score + m15_trend_score
+        
+        trend_info = {
+            'h1_trend': 'UP' if h1_trend_score > 0 else 'DOWN' if h1_trend_score < 0 else 'NEUTRAL',
+            'm15_trend': 'UP' if m15_trend_score > 0 else 'DOWN' if m15_trend_score < 0 else 'NEUTRAL',
+            'h1_rsi': round(h1_rsi, 1),
+            'h1_ema_10': round(h1_ema_10, 2),
+            'h1_ema_20': round(h1_ema_20, 2),
+            'score': total_score
+        }
+        
+        if total_score >= 2:
+            return 'UP', trend_info
+        elif total_score <= -2:
+            return 'DOWN', trend_info
+        else:
+            return 'NEUTRAL', trend_info
+            
+    except Exception as e:
+        print(f"MTF Error: {e}")
+        return 'NEUTRAL', {}
 
 def calculate_features(df):
     stock = wrap(df)
@@ -711,8 +815,28 @@ async def signal_finder(state):
             # Print status
             print(f"Bias: {bias} | Pos: {num_positions} | Price: {current_price:.2f} | RSI: {rsi:.2f} | Prob(UP): {prob:.2f}", end="\r")
             
+            # Check trading hours
+            if not is_trading_time():
+                now = datetime.now()
+                print(f"\n⏰ Outside trading hours ({now.strftime('%H:%M')} - Weekend or closed)", end="\r")
+                await asyncio.sleep(60)  # Check every minute
+                continue
+            
             if num_positions >= MAX_POSITIONS:
                 await asyncio.sleep(5)
+                continue
+            
+            # Don't open new positions if any current position is in loss
+            has_losing_position = False
+            if positions:
+                for p in positions:
+                    if p.profit < -1000:
+                        has_losing_position = True
+                        break
+            
+            if has_losing_position:
+                print(f"\n⚠️ Position in loss - waiting before opening new trades", end="\r")
+                await asyncio.sleep(10)
                 continue
             
             # Entry Logic
